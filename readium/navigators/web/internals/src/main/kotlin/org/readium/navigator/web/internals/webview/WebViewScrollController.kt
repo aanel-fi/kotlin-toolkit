@@ -196,14 +196,14 @@ private fun RelaxedWebView.scrollToProgression(
 
     when (orientation) {
         Orientation.Vertical -> {
-            scrollTo(scrollX, ceil((progression * docHeight)).roundToInt())
+            scrollTo(scrollX, ceil((progression * docHeight)).roundToInt().coerceIn(0, maxScrollY))
         }
         Orientation.Horizontal -> when (direction) {
             LayoutDirection.Ltr -> {
-                scrollTo(ceil(progression * docWidth).roundToInt(), scrollY)
+                scrollTo(ceil(progression * docWidth).roundToInt().coerceIn(0, maxScrollX), scrollY)
             }
             LayoutDirection.Rtl -> {
-                scrollTo((ceil((1 - progression) * docWidth)).roundToInt(), scrollY)
+                scrollTo((ceil((1 - progression) * docWidth)).roundToInt().coerceIn(0, maxScrollX), scrollY)
             }
         }
     }
@@ -215,10 +215,10 @@ private fun RelaxedWebView.scrollToOffset(
 ) {
     when (orientation) {
         Orientation.Vertical -> {
-            scrollTo(scrollX, offset)
+            scrollTo(scrollX, offset.coerceIn(0, maxScrollY))
         }
         Orientation.Horizontal -> {
-            scrollTo(offset, scrollY)
+            scrollTo(offset.coerceIn(0, maxScrollX), scrollY)
         }
     }
 }
