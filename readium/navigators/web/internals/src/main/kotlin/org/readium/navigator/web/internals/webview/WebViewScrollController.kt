@@ -196,14 +196,14 @@ private fun RelaxedWebView.scrollToProgression(
 
     when (orientation) {
         Orientation.Vertical -> {
-            scrollTo(scrollX, ceil((progression * docHeight)).roundToInt().coerceIn(0, maxScrollY))
+            scrollTo(scrollX, ceil((progression * docHeight)).roundToInt().coerceToScrollRange(maxScrollY))
         }
         Orientation.Horizontal -> when (direction) {
             LayoutDirection.Ltr -> {
-                scrollTo(ceil(progression * docWidth).roundToInt().coerceIn(0, maxScrollX), scrollY)
+                scrollTo(ceil(progression * docWidth).roundToInt().coerceToScrollRange(maxScrollX), scrollY)
             }
             LayoutDirection.Rtl -> {
-                scrollTo((ceil((1 - progression) * docWidth)).roundToInt().coerceIn(0, maxScrollX), scrollY)
+                scrollTo((ceil((1 - progression) * docWidth)).roundToInt().coerceToScrollRange(maxScrollX), scrollY)
             }
         }
     }
@@ -215,10 +215,10 @@ private fun RelaxedWebView.scrollToOffset(
 ) {
     when (orientation) {
         Orientation.Vertical -> {
-            scrollTo(scrollX, offset.coerceIn(0, maxScrollY))
+            scrollTo(scrollX, offset.coerceToScrollRange(maxScrollY))
         }
         Orientation.Horizontal -> {
-            scrollTo(offset.coerceIn(0, maxScrollX), scrollY)
+            scrollTo(offset.coerceToScrollRange(maxScrollX), scrollY)
         }
     }
 }
@@ -270,3 +270,11 @@ private fun RelaxedWebView.scrollBy(delta: Offset): Offset {
     scrollBy(roundedX, roundedY)
     return Offset(coercedX, coercedY)
 }
+
+/**
+ * Coerces a scroll target into `0..max`. A WebView whose content is shorter than
+ * its viewport, or not measured yet, reports a negative [max]; its only valid
+ * offset is 0, and `coerceIn(0, max)` would throw on that empty range.
+ */
+internal fun Int.coerceToScrollRange(max: Int): Int =
+    coerceIn(0, max.coerceAtLeast(0))
