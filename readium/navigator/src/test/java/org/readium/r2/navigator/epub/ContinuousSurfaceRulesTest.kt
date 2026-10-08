@@ -96,6 +96,13 @@ class ContinuousSurfaceRulesTest {
     }
 
     @Test
+    fun `a target that fits in the viewport lands at the middle, a taller one at the top`() {
+        assertEquals(400, landingAlignment(explicit = null, centred = true, height = 800))
+        assertEquals(0, landingAlignment(explicit = null, centred = false, height = 800))
+        assertEquals(120, landingAlignment(explicit = 120, centred = true, height = 800))
+    }
+
+    @Test
     fun `a landing is clamped to the last offset`() {
         assertEquals(
             LandingPlan(9200, setOf(9), false),

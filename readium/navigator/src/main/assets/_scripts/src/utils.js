@@ -156,11 +156,13 @@ export function resolveLocatorY(locator) {
     return null;
   }
 
+  // A target that fits in the viewport is addressed by its middle, so that it can be shown at the
+  // middle of the screen. A taller one is addressed by its top.
   const rect = range.getBoundingClientRect();
-  const isText = Boolean(locator.text && locator.text.highlight);
+  const centred = rect.height <= window.innerHeight;
   return {
-    y: rect.top + window.scrollY + (isText ? rect.height / 2 : 0),
-    method: isText ? "text" : "element",
+    y: rect.top + window.scrollY + (centred ? rect.height / 2 : 0),
+    centred: centred,
   };
 }
 

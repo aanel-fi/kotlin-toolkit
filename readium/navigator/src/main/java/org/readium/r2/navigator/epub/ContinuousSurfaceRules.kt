@@ -106,6 +106,14 @@ internal fun landingPlan(
     return LandingPlan(globalY, required, (current + required).size > maxLive)
 }
 
+/**
+ * The line of the viewport a navigation's target lands on, in pixels below the viewport top:
+ * [explicit] when the request names one, the middle for a target that the page addressed by its
+ * middle (it fits in the viewport), else the top.
+ */
+internal fun landingAlignment(explicit: Int?, centred: Boolean, height: Int): Int =
+    explicit ?: if (centred) height / 2 else 0
+
 /** The offset of the viewport top for a landing; see [landingPlan]. */
 internal fun landingOffset(
     extents: List<Int>,

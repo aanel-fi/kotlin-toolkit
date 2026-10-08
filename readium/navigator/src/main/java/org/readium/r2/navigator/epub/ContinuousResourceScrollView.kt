@@ -153,6 +153,7 @@ internal class ContinuousResourceScrollView(
         var resolving: Boolean = false,
         var localY: Double? = null,
         var anchored: Boolean = false,
+        var centred: Boolean = false,
         var queryGeneration: Int = 0,
         var preparedIndices: Set<Int> = emptySet(),
         var landingPosted: Boolean = false,
@@ -965,7 +966,8 @@ internal class ContinuousResourceScrollView(
             const resolution=readium.resolveLocatorY($locatorJSON);
             return JSON.stringify({
               y:resolution===null?null:(resolution.y+${request.anchorDeltaCss})*(${webView.width}/window.innerWidth),
-              anchored:resolution!==null
+              anchored:resolution!==null,
+              centred:resolution!==null&&resolution.centred===true
             });
         })()"""
         webView.evaluateJavascript(script) { result ->
@@ -990,6 +992,7 @@ internal class ContinuousResourceScrollView(
                 }
                 request.localY = localY
                 request.anchored = data.getBoolean("anchored")
+                request.centred = data.optBoolean("centred")
                 request.resolving = false
                 prepareNavigationLanding(request)
             } catch (error: Exception) {
@@ -1004,7 +1007,7 @@ internal class ContinuousResourceScrollView(
         if (cssCapturePending || cssTransition != null) return
         if (pendingNavigation !== request || request.landingPosted) return
         val localY = request.localY ?: return
-        val alignment = request.alignmentY ?: if (request.locator.text.highlight != null) height / 2 else 0
+        val alignment = landingAlignment(request.alignmentY, request.centred, height)
         val plan = landingPlan(extents, height, scrollY, request.index, localY, alignment, MAX_LIVE)
         val required = plan.required
         if (plan.overCapacity) {
