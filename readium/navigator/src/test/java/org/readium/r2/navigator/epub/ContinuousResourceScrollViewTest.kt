@@ -30,6 +30,7 @@ class ContinuousResourceScrollViewTest {
 
     private val shown = mutableListOf<Unit>()
     private val ended = mutableListOf<Pair<Locator, Boolean>>()
+    private var onEnded: (Locator, Boolean) -> Unit = { _, _ -> }
 
     // Robolectric does not lay the surface out, so its height stays 0 and no page is mounted:
     // a navigation never resolves.
@@ -46,7 +47,10 @@ class ContinuousResourceScrollViewTest {
         expectsNavigation = true,
         onPositionChanged = {},
         onFirstPositionShown = { shown += Unit },
-        onNavigationEnded = { locator, landed -> ended += locator to landed }
+        onNavigationEnded = { locator, landed ->
+            ended += locator to landed
+            onEnded(locator, landed)
+        }
     ).also { activity.setContentView(it) }
 
     private fun locator(index: Int) = Locator(
@@ -109,8 +113,29 @@ class ContinuousResourceScrollViewTest {
 
         surface.goToLocator(1, locator(1))
         surface.goToLocator(2, locator(2))
+        ShadowLooper.idleMainLooper()
 
         assertEquals(listOf(locator(1) to false), ended)
+    }
+
+    @Test
+    fun `a navigation made from the listener is the latest one`() {
+        lateinit var surface: ContinuousResourceScrollView
+        var redirected = false
+        onEnded = { _, _ ->
+            if (!redirected) {
+                redirected = true
+                surface.goToLocator(0, locator(0))
+            }
+        }
+        surface = surface(resourceCount = 3)
+
+        surface.goToLocator(1, locator(1))
+        surface.goToLocator(2, locator(2))
+        ShadowLooper.idleMainLooper()
+
+        // The request from the listener replaces the one that was pending when it ran.
+        assertEquals(listOf(locator(1) to false, locator(2) to false), ended)
     }
 
     @Test

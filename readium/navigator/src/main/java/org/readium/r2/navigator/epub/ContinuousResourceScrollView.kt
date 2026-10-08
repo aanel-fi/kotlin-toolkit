@@ -179,7 +179,15 @@ internal class ContinuousResourceScrollView(
         revealed = true
         column.visibility = View.VISIBLE
         updateVisibleRegions()
-        onFirstPositionShown()
+        notifyOwner { onFirstPositionShown() }
+    }
+
+    /**
+     * Calls the owner after the current pass. The owner may navigate from a callback, and a
+     * callback in the middle of a pass would let the rest of the pass overwrite that request.
+     */
+    private fun notifyOwner(callback: () -> Unit) {
+        post { if (!disposed) callback() }
     }
 
     /**
@@ -187,12 +195,16 @@ internal class ContinuousResourceScrollView(
      * keeping the reading position, so every path that gives up on one comes through here.
      */
     private fun endNavigation(request: PendingNavigation, end: NavigationEnd) {
-        if (pendingNavigation === request) pendingNavigation = null
+        if (pendingNavigation === request) {
+            pendingNavigation = null
+            // A position that was staged for this request must not outlive it.
+            if (end != NavigationEnd.LANDED) slots.forEach { it.stagedLocal = null }
+        }
         if (request.ended) return
         request.ended = true
         if (end.fault) Timber.w("navigation ended $end href=${request.locator.href}")
-        if (request.kind == NavigationKind.JUMP && !disposed) {
-            onNavigationEnded(request.locator, end == NavigationEnd.LANDED)
+        if (request.kind == NavigationKind.JUMP) {
+            notifyOwner { onNavigationEnded(request.locator, end == NavigationEnd.LANDED) }
         }
     }
 
@@ -295,6 +307,7 @@ internal class ContinuousResourceScrollView(
         disposed = true
         flingScroller.abortAnimation()
         cancelCssTransition(CssCancel.DISPOSE)
+        pendingNavigation?.ended = true
         pendingNavigation = null
         anchorCaptureGeneration++
         reflowGeneration++
