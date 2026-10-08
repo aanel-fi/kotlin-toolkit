@@ -859,10 +859,10 @@ internal class ContinuousResourceScrollView(
         if (decision.changed) {
             if (restore && reflowAnchor == null && pendingNavigation == null) reflowAnchor = cachedAnchor
             geometryEpoch++
-            pendingNavigation?.apply {
-                localY = null
-                preparedIndices = emptySet()
-            }
+            // The pages the navigation prepared stay mounted while its target is resolved
+            // again: a page that is mounted again reports its layout again, and the landing
+            // would not come.
+            pendingNavigation?.localY = null
             anchorCaptureGeneration++
         }
         measure(index, slot, page)
