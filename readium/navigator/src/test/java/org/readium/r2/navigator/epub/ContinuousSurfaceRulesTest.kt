@@ -238,6 +238,20 @@ class ContinuousSurfaceRulesTest {
     }
 
     @Test
+    fun `a viewport position maps to the page's own client coordinates`() {
+        // A page of 1080 view pixels shows a layout viewport of 360 CSS pixels.
+        assertEquals(100.0, pageClientY(viewportY = 900, pageTop = 600, cssViewportWidth = 360.0, viewWidth = 1080))
+        assertEquals(0.0, pageClientY(viewportY = 600, pageTop = 600, cssViewportWidth = 360.0, viewWidth = 1080))
+        assertEquals(-50.0, pageClientY(viewportY = 450, pageTop = 600, cssViewportWidth = 360.0, viewWidth = 1080))
+    }
+
+    @Test
+    fun `a page that is not measured has no client coordinates`() {
+        assertNull(pageClientY(viewportY = 900, pageTop = 600, cssViewportWidth = 0.0, viewWidth = 1080))
+        assertNull(pageClientY(viewportY = 900, pageTop = 600, cssViewportWidth = 360.0, viewWidth = 0))
+    }
+
+    @Test
     fun `a locator resolves to its range, else to its progression`() {
         assertEquals(312.5, resolvedLocalY(312.5, 0.9, 1000))
         assertEquals(250.0, resolvedLocalY(null, 0.25, 1000))

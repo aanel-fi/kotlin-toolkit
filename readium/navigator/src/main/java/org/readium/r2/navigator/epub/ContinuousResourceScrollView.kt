@@ -41,6 +41,7 @@ internal class ContinuousResourceScrollView(
     private val onPositionChanged: () -> Unit,
     private val onFirstPositionShown: () -> Unit = {},
     private val onNavigationEnded: (locator: Locator, landed: Boolean) -> Unit = { _, _ -> },
+    private val onScrolled: (offset: Int) -> Unit = {},
 ) : ScrollView(context) {
 
     private data class Slot(
@@ -300,6 +301,32 @@ internal class ContinuousResourceScrollView(
         resourceProgression(extents, index, globalY)
 
     val currentPage: R2EpubPageFragment? get() = slots.getOrNull(activeResourceIndex)?.page
+
+    /** A mounted page and a point of the surface in that page's own client coordinates. */
+    class PagePoint(val index: Int, val page: R2EpubPageFragment, val clientY: Double)
+
+    /** Stops a fling in progress. The offset stays where the fling had brought it. */
+    fun stopScroll() {
+        flingScroller.abortAnimation()
+    }
+
+    /**
+     * The page under the point [viewportY] view pixels below the top of the surface. Null when
+     * that page is not mounted or not measured yet.
+     */
+
+    fun pageAt(viewportY: Int): PagePoint? {
+        if (slots.isEmpty()) return null
+        val index = resourceAt(scrollY + viewportY)
+        val slot = slots[index]
+        val page = slot.page?.takeIf { slot.ready } ?: return null
+        val webView = page.webView ?: return null
+        val own = IntArray(2).also { getLocationInWindow(it) }
+        val pageLocation = IntArray(2).also { webView.getLocationInWindow(it) }
+        val clientY = pageClientY(viewportY, pageLocation[1] - own[1], slot.cssViewportWidth, webView.width)
+            ?: return null
+        return PagePoint(index, page, clientY)
+    }
 
     fun pages(): List<R2EpubPageFragment> = slots.mapNotNull { it.page }
 
@@ -595,6 +622,7 @@ internal class ContinuousResourceScrollView(
         super.onScrollChanged(l, t, oldl, oldt)
         if (disposed) return
         if (t != oldt) {
+            onScrolled(t)
             scheduleIdle()
         }
         positionPages()

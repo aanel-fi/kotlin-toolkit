@@ -222,6 +222,16 @@ internal fun geometryDecision(
 internal fun resolvedLocalY(y: Double?, progression: Double?, extent: Int): Double? =
     y ?: progression?.let { extent * it }
 
+/**
+ * The y coordinate, in the CSS pixels of a page's own viewport, of the point [viewportY] view
+ * pixels below the top of the surface, for a page whose view starts [pageTop] view pixels below
+ * it. Null while the page's layout viewport is not known.
+ */
+internal fun pageClientY(viewportY: Int, pageTop: Int, cssViewportWidth: Double, viewWidth: Int): Double? {
+    if (cssViewportWidth <= 0.0 || viewWidth <= 0) return null
+    return (viewportY - pageTop) * cssViewportWidth / viewWidth
+}
+
 /** A page's report of its layout, from the reflowable script's geometry observer. */
 internal data class GeometrySnapshot(val reasons: Set<String>, val sequence: Int, val extentCssPx: Double)
 

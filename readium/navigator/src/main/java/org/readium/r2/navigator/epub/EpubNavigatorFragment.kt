@@ -321,6 +321,52 @@ public class EpubNavigatorFragment internal constructor(
         return page.runJavaScriptSuspend(script)
     }
 
+    /**
+     * Stops a fling of the continuous surface where it is. Does nothing in the other modes.
+     */
+    @ExperimentalReadiumApi
+    public fun stopContinuousScroll() {
+        continuousSurface?.stopScroll()
+    }
+
+    /**
+     * The HTML resource under the point [viewportY] pixels below the top of the navigator's view.
+     *
+     * With [Configuration.continuousScroll], several resources can be on the screen, and
+     * [evaluateJavascript] runs in the one at the top of the viewport. Use this function to reach
+     * the resource at another position, for example under a touch or at the middle of the screen.
+     *
+     * Returns null when the continuous surface is not in use, or when the resource at that
+     * position is not loaded yet.
+     */
+    @ExperimentalReadiumApi
+    public fun resourceAt(viewportY: Int): ResourceAtPoint? {
+        val point = continuousSurface?.pageAt(viewportY) ?: return null
+        val link = point.page.link ?: return null
+        return ResourceAtPoint(link, point.clientY, point.page)
+    }
+
+    /**
+     * A loaded HTML resource of the continuous surface, and a point in it.
+     *
+     * @param link The resource in the reading order.
+     * @param clientY The requested point's y coordinate in the CSS pixels of the resource's own
+     * viewport, as `document.elementFromPoint` and `document.caretRangeFromPoint` take it. It can
+     * be negative or larger than the viewport's height at the edge of a resource.
+     */
+    @ExperimentalReadiumApi
+    public class ResourceAtPoint internal constructor(
+        public val link: Link,
+        public val clientY: Double,
+        private val page: R2EpubPageFragment,
+    ) {
+        /** Evaluates the given JavaScript in this resource. */
+        public suspend fun evaluateJavascript(script: String): String? {
+            page.awaitLoaded()
+            return page.runJavaScriptSuspend(script)
+        }
+    }
+
     private val viewModel: EpubNavigatorViewModel by viewModels {
         EpubNavigatorViewModel.createFactory(
             requireActivity().application,
@@ -484,7 +530,8 @@ public class EpubNavigatorFragment internal constructor(
             onFirstPositionShown = { config.continuousScrollListener?.onFirstPositionShown() },
             onNavigationEnded = { locator, landed ->
                 config.continuousScrollListener?.onNavigationEnded(locator, landed)
-            }
+            },
+            onScrolled = { offset -> config.continuousScrollListener?.onScrolled(offset) }
         ).also { parent.addView(it, params) }
     }
 
@@ -1247,6 +1294,13 @@ public interface ContinuousScrollListener {
      * change because of it.
      */
     public fun onNavigationEnded(locator: Locator, landed: Boolean) {}
+
+    /**
+     * The surface moved to [offset], in pixels from the top of the first resource. Called for
+     * every change, whatever moved the surface: the user, a fling, [EpubNavigatorFragment.go] or
+     * a layout change. Called during the surface's own scroll pass: do not navigate from it.
+     */
+    public fun onScrolled(offset: Int) {}
 }
 
 /**
