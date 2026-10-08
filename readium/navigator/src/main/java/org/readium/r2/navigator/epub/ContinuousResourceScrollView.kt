@@ -61,6 +61,9 @@ internal class ContinuousResourceScrollView(
 
     private var writingChildScroll = false
     private var revealed = false
+
+    /** Set by [dispose]. Work that was posted before it must not mount a page or move the offset. */
+    private var disposed = false
     private var navigationRequested = false
     private var geometryDroppedDuringCss = false
     private val flingScroller = android.widget.OverScroller(context)
@@ -177,7 +180,7 @@ internal class ContinuousResourceScrollView(
 
     /** A first position that cannot resolve falls back to the start of its resource. */
     private fun failInitialLoad(index: Int?, reason: LoadFailure) {
-        if (revealed) return
+        if (revealed || disposed) return
         pendingNavigation = null
         val target = slots.take(index ?: 0).sumOf { it.extent }
         scrollTo(0, target)
@@ -271,6 +274,8 @@ internal class ContinuousResourceScrollView(
     fun pages(): List<R2EpubPageFragment> = slots.mapNotNull { it.page }
 
     fun dispose() {
+        disposed = true
+        flingScroller.abortAnimation()
         cancelCssTransition(CssCancel.DISPOSE)
         pendingNavigation = null
         anchorCaptureGeneration++
@@ -284,6 +289,7 @@ internal class ContinuousResourceScrollView(
     }
 
     fun goToLocator(index: Int, locator: Locator) {
+        if (disposed) return
         navigationRequested = true
         flingScroller.abortAnimation()
         val cssIsPending = cssCapturePending || cssTransition != null
@@ -313,6 +319,7 @@ internal class ContinuousResourceScrollView(
     }
 
     fun applyReadiumCss(script: String) {
+        if (disposed) return
         if (pendingNavigation?.kind == NavigationKind.REFLOW) {
             pendingNavigation = null
         }
@@ -553,6 +560,7 @@ internal class ContinuousResourceScrollView(
 
     override fun onScrollChanged(l: Int, t: Int, oldl: Int, oldt: Int) {
         super.onScrollChanged(l, t, oldl, oldt)
+        if (disposed) return
         if (t != oldt) {
             scheduleIdle()
         }
@@ -703,7 +711,7 @@ internal class ContinuousResourceScrollView(
     }
 
     private fun updateWindow() {
-        if (height <= 0 || slots.isEmpty() || fragments.isStateSaved) return
+        if (disposed || height <= 0 || slots.isEmpty() || fragments.isStateSaved) return
         val request = pendingNavigation
         val required = if (request == null) {
             emptySet()
