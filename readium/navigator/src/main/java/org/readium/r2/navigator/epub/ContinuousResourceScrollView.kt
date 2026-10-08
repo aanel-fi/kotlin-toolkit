@@ -39,6 +39,8 @@ internal class ContinuousResourceScrollView(
     resources: List<EpubReflowable>,
     private val expectsNavigation: Boolean,
     private val onPositionChanged: () -> Unit,
+    private val onFirstPositionShown: () -> Unit = {},
+    private val onNavigationEnded: (locator: Locator, landed: Boolean) -> Unit = { _, _ -> },
 ) : ScrollView(context) {
 
     private data class Slot(
@@ -132,7 +134,7 @@ internal class ContinuousResourceScrollView(
         parentOwnsGesture = true
         reflowAnchor = null
         reflowGeneration++
-        pendingNavigation = null
+        pendingNavigation?.let { endNavigation(it, NavigationEnd.SUPERSEDED) }
         cachedAnchor = null
         anchorCaptureGeneration++
     }
@@ -159,6 +161,7 @@ internal class ContinuousResourceScrollView(
         var stagedEpoch: Int = -1,
         var stagedY: Int = -1,
         var stageRemaining: Int = 0,
+        var ended: Boolean = false,
     )
 
     init {
@@ -176,12 +179,27 @@ internal class ContinuousResourceScrollView(
         revealed = true
         column.visibility = View.VISIBLE
         updateVisibleRegions()
+        onFirstPositionShown()
+    }
+
+    /**
+     * Ends [request] and reports it. A request that stays pending stops the surface from
+     * keeping the reading position, so every path that gives up on one comes through here.
+     */
+    private fun endNavigation(request: PendingNavigation, end: NavigationEnd) {
+        if (pendingNavigation === request) pendingNavigation = null
+        if (request.ended) return
+        request.ended = true
+        if (end.fault) Timber.w("navigation ended $end href=${request.locator.href}")
+        if (request.kind == NavigationKind.JUMP && !disposed) {
+            onNavigationEnded(request.locator, end == NavigationEnd.LANDED)
+        }
     }
 
     /** A first position that cannot resolve falls back to the start of its resource. */
     private fun failInitialLoad(index: Int?, reason: LoadFailure) {
         if (revealed || disposed) return
-        pendingNavigation = null
+        pendingNavigation?.let { endNavigation(it, NavigationEnd.TIMED_OUT) }
         val target = slots.take(index ?: 0).sumOf { it.extent }
         scrollTo(0, target)
         positionPages()
@@ -293,14 +311,16 @@ internal class ContinuousResourceScrollView(
         navigationRequested = true
         flingScroller.abortAnimation()
         val cssIsPending = cssCapturePending || cssTransition != null
-        pendingNavigation = null
+        pendingNavigation?.let { endNavigation(it, NavigationEnd.SUPERSEDED) }
         parentOwnsGesture = false
         coastingGesture = false
         cachedAnchor = null
         if (!cssIsPending) anchorCaptureGeneration++
         reflowAnchor = null
         reflowGeneration++
-        pendingNavigation = PendingNavigation(index, locator)
+        val request = PendingNavigation(index, locator)
+        pendingNavigation = request
+        postDelayed({ endNavigation(request, NavigationEnd.TIMED_OUT) }, NAVIGATION_TIMEOUT_MS)
         if (cssIsPending) {
             return
         }
@@ -320,9 +340,8 @@ internal class ContinuousResourceScrollView(
 
     fun applyReadiumCss(script: String) {
         if (disposed) return
-        if (pendingNavigation?.kind == NavigationKind.REFLOW) {
-            pendingNavigation = null
-        }
+        pendingNavigation?.takeIf { it.kind == NavigationKind.REFLOW }
+            ?.let { endNavigation(it, NavigationEnd.SUPERSEDED) }
         invalidatePendingNavigationResolution()
         reflowAnchor = null
         reflowGeneration++
@@ -526,6 +545,7 @@ internal class ContinuousResourceScrollView(
         cssTransitionGeneration++
         cssCapturePending = false
         cssTransition = null
+        geometryDroppedDuringCss = false
         removeCssDrawGate()
         if (reason.degraded) Timber.w("css-transition cancel reason=$reason")
         if (reason.teardown) {
@@ -720,8 +740,7 @@ internal class ContinuousResourceScrollView(
         }
         val window = liveWindow(extents, scrollY, height, required, MAX_LIVE)
         if (window.overCapacity) {
-            if (request != null) Timber.w("navigate-capacity required=${required.size} max=$MAX_LIVE")
-            pendingNavigation = null
+            request?.let { endNavigation(it, NavigationEnd.OVER_CAPACITY) }
             failInitialLoad(request?.index, LoadFailure.WINDOW_CAPACITY)
         }
         val wanted = window.wanted
@@ -829,13 +848,15 @@ internal class ContinuousResourceScrollView(
                 return@postDelayed
             }
             reflowAnchor = null
-            pendingNavigation = PendingNavigation(
+            val request = PendingNavigation(
                 index = anchor.index,
                 locator = anchor.locator,
                 anchorDeltaCss = anchor.deltaCss,
                 alignmentY = anchor.sampleScreenY,
                 kind = NavigationKind.REFLOW,
             )
+            pendingNavigation = request
+            postDelayed({ endNavigation(request, NavigationEnd.TIMED_OUT) }, NAVIGATION_TIMEOUT_MS)
             updateWindow()
             resolvePendingNavigation()
         }, REFLOW_RESTORE_DELAY_MS)
@@ -927,8 +948,7 @@ internal class ContinuousResourceScrollView(
                     extent = slot.extent
                 )
                 if (localY == null) {
-                    Timber.w("navigate-unresolved href=${request.locator.href}")
-                    pendingNavigation = null
+                    endNavigation(request, NavigationEnd.UNRESOLVED)
                     failInitialLoad(request.index, LoadFailure.UNRESOLVED)
                     scheduleUpdate()
                     return@evaluateJavascript
@@ -939,7 +959,7 @@ internal class ContinuousResourceScrollView(
                 prepareNavigationLanding(request)
             } catch (error: Exception) {
                 Timber.e(error, "navigate-error result=$result")
-                pendingNavigation = null
+                endNavigation(request, NavigationEnd.UNRESOLVED)
                 failInitialLoad(request.index, LoadFailure.ERROR)
             }
         }
@@ -953,8 +973,7 @@ internal class ContinuousResourceScrollView(
         val plan = landingPlan(extents, height, scrollY, request.index, localY, alignment, MAX_LIVE)
         val required = plan.required
         if (plan.overCapacity) {
-            Timber.w("navigate-capacity target=${required.size} max=$MAX_LIVE")
-            pendingNavigation = null
+            endNavigation(request, NavigationEnd.OVER_CAPACITY)
             failInitialLoad(request.index, LoadFailure.CAPACITY)
             scheduleUpdate()
             return
@@ -996,6 +1015,7 @@ internal class ContinuousResourceScrollView(
             updateVisibleRegions()
             scheduleAnchorCapture()
             scheduleUpdate()
+            endNavigation(request, NavigationEnd.LANDED)
         }
     }
 
@@ -1082,6 +1102,9 @@ internal class ContinuousResourceScrollView(
         private const val CSS_TRANSITION_DEADLINE_MS = 1000L
         private const val LOAD_TIMEOUT_MS = 10_000L
 
+        /** A navigation that has not landed after this long ends without a landing. */
+        private const val NAVIGATION_TIMEOUT_MS = 10_000L
+
         /** Without a scroll change for this long, a gesture or a fling is over. */
         private const val IDLE_DELAY_MS = 250L
 
@@ -1121,6 +1144,20 @@ private enum class CssCancel(val teardown: Boolean = false, val degraded: Boolea
     ANCHOR_PAGE_UNLOADED(degraded = true),
     ANCHOR_UNRESOLVED_AFTER_CSS(degraded = true),
     QUERY_ERROR,
+}
+
+/**
+ * How a navigation ends.
+ *
+ * @param fault The request could not be honored, for a reason other than a newer request or
+ * the reader's own scroll.
+ */
+private enum class NavigationEnd(val fault: Boolean = false) {
+    LANDED,
+    SUPERSEDED,
+    UNRESOLVED(fault = true),
+    TIMED_OUT(fault = true),
+    OVER_CAPACITY(fault = true),
 }
 
 private enum class LoadFailure { TIMEOUT, WINDOW_CAPACITY, UNRESOLVED, ERROR, CAPACITY }
