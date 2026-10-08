@@ -77,7 +77,6 @@ internal class ContinuousResourceScrollView(
         )
     }
     private var updatePosted = false
-    private var navigationGeneration = 0
     private var geometryEpoch = 0
     private var pendingNavigation: PendingNavigation? = null
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
@@ -109,7 +108,6 @@ internal class ContinuousResourceScrollView(
     private data class CssTransition(
         val generation: Int,
         val anchor: ViewportAnchor,
-        val startedAt: Long,
         val measurements: MutableMap<Int, CssMeasurement> = mutableMapOf(),
         var pass: Int = 0,
         var commitReady: Boolean = false,
@@ -123,7 +121,7 @@ internal class ContinuousResourceScrollView(
                 coastingGesture = false
                 updateVisibleRegions()
             }
-        }, 250)
+        }, IDLE_DELAY_MS)
     }
 
     private fun beginReaderGesture() {
@@ -131,10 +129,7 @@ internal class ContinuousResourceScrollView(
         parentOwnsGesture = true
         reflowAnchor = null
         reflowGeneration++
-        if (pendingNavigation != null) {
-            pendingNavigation = null
-            navigationGeneration++
-        }
+        pendingNavigation = null
         cachedAnchor = null
         anchorCaptureGeneration++
     }
@@ -147,7 +142,6 @@ internal class ContinuousResourceScrollView(
     )
 
     private data class PendingNavigation(
-        val generation: Int,
         val index: Int,
         val locator: Locator,
         var resolving: Boolean = false,
@@ -158,7 +152,7 @@ internal class ContinuousResourceScrollView(
         var landingPosted: Boolean = false,
         val anchorDeltaCss: Double = 0.0,
         val alignmentY: Int? = null,
-        val reason: String = "jump",
+        val kind: NavigationKind = NavigationKind.JUMP,
         var stagedEpoch: Int = -1,
         var stagedY: Int = -1,
         var stageRemaining: Int = 0,
@@ -169,7 +163,7 @@ internal class ContinuousResourceScrollView(
         addView(column, LayoutParams(-1, -2))
         slots.forEach { column.addView(it.frame, LinearLayout.LayoutParams(-1, 1)) }
         column.visibility = View.INVISIBLE
-        postDelayed({ failInitialLoad(pendingNavigation?.index, "timeout") }, LOAD_TIMEOUT_MS)
+        postDelayed({ failInitialLoad(pendingNavigation?.index, LoadFailure.TIMEOUT) }, LOAD_TIMEOUT_MS)
         post { updateWindow() }
     }
 
@@ -182,14 +176,13 @@ internal class ContinuousResourceScrollView(
     }
 
     /** A first position that cannot resolve falls back to the start of its resource. */
-    private fun failInitialLoad(index: Int?, reason: String) {
+    private fun failInitialLoad(index: Int?, reason: LoadFailure) {
         if (revealed) return
         pendingNavigation = null
-        navigationGeneration++
         val target = slots.take(index ?: 0).sumOf { it.extent }
         scrollTo(0, target)
         positionPages()
-        Timber.e("load-failed reason=$reason index=$index offset=$scrollY")
+        Timber.w("load-failed reason=$reason index=$index")
         reveal()
         scheduleUpdate()
     }
@@ -256,7 +249,7 @@ internal class ContinuousResourceScrollView(
     private val readerIdle: Boolean
         get() = !touchActive && !parentOwnsGesture && !coastingGesture
 
-    private fun onChildScroll(index: Int, slot: Slot, page: R2EpubPageFragment, y: Int, oldY: Int) {
+    private fun onChildScroll(index: Int, slot: Slot, page: R2EpubPageFragment) {
         if (slot.page !== page || writingChildScroll) return
         if (!slot.fresh && cssTransition == null && slot.ready && !slot.adjustPending) {
             slot.adjustPending = true
@@ -268,7 +261,7 @@ internal class ContinuousResourceScrollView(
 
     private val extents: List<Int> get() = slots.map { it.extent }
 
-    fun resourceAt(globalY: Int): Int = resourceAt(extents, globalY)
+    private fun resourceAt(globalY: Int): Int = resourceAt(extents, globalY)
 
     fun resourceProgression(index: Int, globalY: Int): Double =
         resourceProgression(extents, index, globalY)
@@ -278,16 +271,15 @@ internal class ContinuousResourceScrollView(
     fun pages(): List<R2EpubPageFragment> = slots.mapNotNull { it.page }
 
     fun dispose() {
-        cancelCssTransition("dispose")
+        cancelCssTransition(CssCancel.DISPOSE)
         pendingNavigation = null
-        navigationGeneration++
         anchorCaptureGeneration++
         reflowGeneration++
         slots.forEachIndexed { index, slot -> if (slot.page != null) unmount(index, slot) }
     }
 
     override fun onDetachedFromWindow() {
-        cancelCssTransition("detach")
+        cancelCssTransition(CssCancel.DETACH)
         super.onDetachedFromWindow()
     }
 
@@ -296,14 +288,13 @@ internal class ContinuousResourceScrollView(
         flingScroller.abortAnimation()
         val cssIsPending = cssCapturePending || cssTransition != null
         pendingNavigation = null
-        navigationGeneration++
         parentOwnsGesture = false
         coastingGesture = false
         cachedAnchor = null
         if (!cssIsPending) anchorCaptureGeneration++
         reflowAnchor = null
         reflowGeneration++
-        pendingNavigation = PendingNavigation(++navigationGeneration, index, locator)
+        pendingNavigation = PendingNavigation(index, locator)
         if (cssIsPending) {
             return
         }
@@ -322,9 +313,8 @@ internal class ContinuousResourceScrollView(
     }
 
     fun applyReadiumCss(script: String) {
-        if (pendingNavigation?.reason == "reflow") {
+        if (pendingNavigation?.kind == NavigationKind.REFLOW) {
             pendingNavigation = null
-            navigationGeneration++
         }
         invalidatePendingNavigationResolution()
         reflowAnchor = null
@@ -340,10 +330,9 @@ internal class ContinuousResourceScrollView(
         if (cssCapturePending) return
         cssCapturePending = true
         val generation = ++cssTransitionGeneration
-        val startedAt = android.os.SystemClock.uptimeMillis()
         postDelayed({
             if (generation == cssTransitionGeneration && (cssCapturePending || cssTransition?.generation == generation)) {
-                cancelCssTransition("deadline")
+                cancelCssTransition(CssCancel.DEADLINE)
             }
         }, CSS_TRANSITION_DEADLINE_MS)
         val anchorGeneration = ++anchorCaptureGeneration
@@ -351,13 +340,12 @@ internal class ContinuousResourceScrollView(
             if (generation != cssTransitionGeneration) return@captureAnchorAt
             cssCapturePending = false
             if (anchor == null || !slots[anchor.index].ready) {
-                Timber.e("css-transition anchor-unresolved generation=$generation")
                 runQueuedCssDirectly()
                 return@captureAnchorAt
             }
             reflowAnchor = null
             reflowGeneration++
-            val transition = CssTransition(generation, anchor, startedAt)
+            val transition = CssTransition(generation, anchor)
             cssTransition = transition
             slots.forEach { it.measurementGeneration++ }
             installCssDrawGate(transition)
@@ -382,7 +370,7 @@ internal class ContinuousResourceScrollView(
                 val measurement = transition.measurements[anchor.index]
                 val targetY = measurement?.anchorY
                 if (targetY == null) {
-                    cancelCssTransition("anchor-lost")
+                    cancelCssTransition(CssCancel.ANCHOR_LOST)
                     return@OnPreDrawListener true
                 }
                 val prefix = slots.take(anchor.index).sumOf { it.extent }
@@ -425,7 +413,7 @@ internal class ContinuousResourceScrollView(
             slot.page?.takeIf { slot.ready && it.isLoaded.value }?.webView?.let { index to it }
         }
         if (loaded.none { it.first == transition.anchor.index }) {
-            cancelCssTransition("anchor-page-unloaded")
+            cancelCssTransition(CssCancel.ANCHOR_PAGE_UNLOADED)
             return
         }
         var remaining = loaded.size
@@ -456,7 +444,7 @@ internal class ContinuousResourceScrollView(
                     )
                 } catch (error: Exception) {
                     Timber.e(error, "css-transition query-error generation=${transition.generation} index=$index result=$result")
-                    cancelCssTransition("query-error")
+                    cancelCssTransition(CssCancel.QUERY_ERROR)
                     return@evaluateJavascript
                 }
                 val ready = {
@@ -477,7 +465,7 @@ internal class ContinuousResourceScrollView(
     private fun prepareCssCommit(transition: CssTransition) {
         if (cssTransition !== transition) return
         if (transition.measurements[transition.anchor.index]?.anchorY == null) {
-            cancelCssTransition("anchor-unresolved-after-css")
+            cancelCssTransition(CssCancel.ANCHOR_UNRESOLVED_AFTER_CSS)
             return
         }
         transition.measurements.forEach { (index, measurement) ->
@@ -499,7 +487,7 @@ internal class ContinuousResourceScrollView(
     private fun finishCssTransition(transition: CssTransition) {
         if (cssTransition !== transition) return
         cssTransition = null
-        cssObserverIgnoreUntil = android.os.SystemClock.uptimeMillis() + 500
+        cssObserverIgnoreUntil = android.os.SystemClock.uptimeMillis() + CSS_REPORT_IGNORE_MS
         removeCssDrawGate()
         if (pendingNavigation != null) {
             cachedAnchor = null
@@ -526,15 +514,14 @@ internal class ContinuousResourceScrollView(
         }
     }
 
-    private fun cancelCssTransition(reason: String) {
+    private fun cancelCssTransition(reason: CssCancel) {
         if (!cssCapturePending && cssTransition == null && queuedCssScripts.isEmpty()) return
-        val transition = cssTransition
         cssTransitionGeneration++
         cssCapturePending = false
         cssTransition = null
         removeCssDrawGate()
-        Timber.e("css-transition cancel reason=$reason generation=${transition?.generation} elapsed=${transition?.let { android.os.SystemClock.uptimeMillis() - it.startedAt }}")
-        if (reason == "dispose" || reason == "detach") {
+        if (reason.degraded) Timber.w("css-transition cancel reason=$reason")
+        if (reason.teardown) {
             queuedCssScripts.clear()
         } else {
             runQueuedCssDirectly()
@@ -543,7 +530,7 @@ internal class ContinuousResourceScrollView(
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        if (oldh > 0 && (cssCapturePending || cssTransition != null)) cancelCssTransition("viewport")
+        if (oldh > 0 && (cssCapturePending || cssTransition != null)) cancelCssTransition(CssCancel.VIEWPORT)
         super.onSizeChanged(w, h, oldw, oldh)
         if (h <= 0) return
         if (oldh > 0 && reflowAnchor == null) reflowAnchor = cachedAnchor
@@ -600,7 +587,7 @@ internal class ContinuousResourceScrollView(
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 flingScroller.abortAnimation()
-                if (cssCapturePending || cssTransition != null) cancelCssTransition("touch")
+                if (cssCapturePending || cssTransition != null) cancelCssTransition(CssCancel.TOUCH)
                 touchStartY = event.y
                 touchMoving = false
                 touchActive = true
@@ -651,7 +638,7 @@ internal class ContinuousResourceScrollView(
             if (generation == anchorCaptureGeneration && pendingNavigation == null && reflowAnchor == null) {
                 captureAnchorAt(generation, listOf(height / 2, height / 3, height * 2 / 3))
             }
-        }, 100)
+        }, ANCHOR_CAPTURE_DELAY_MS)
     }
 
     private fun captureAnchorAt(
@@ -725,9 +712,9 @@ internal class ContinuousResourceScrollView(
         }
         val window = liveWindow(extents, scrollY, height, required, MAX_LIVE)
         if (window.overCapacity) {
-            Timber.e("window capacity wanted=${window.wanted.size} required=${required.size} max=$MAX_LIVE")
+            if (request != null) Timber.w("navigate-capacity required=${required.size} max=$MAX_LIVE")
             pendingNavigation = null
-            failInitialLoad(request?.index, "window-capacity")
+            failInitialLoad(request?.index, LoadFailure.WINDOW_CAPACITY)
         }
         val wanted = window.wanted
         slots.forEachIndexed { index, slot ->
@@ -736,7 +723,6 @@ internal class ContinuousResourceScrollView(
         slots.forEachIndexed { index, slot ->
             if (index in wanted && slot.page == null) mount(index, slot)
         }
-        if (pages().size > MAX_LIVE) Timber.e("live window exceeds $MAX_LIVE resources")
         positionPages()
         resolvePendingNavigation()
     }
@@ -755,7 +741,7 @@ internal class ContinuousResourceScrollView(
         slot.fresh = true
         slot.freshLocal = -1
         slot.adjustPending = false
-        page.webView?.scrollObserver = { y, oldY -> onChildScroll(index, slot, page, y, oldY) }
+        page.webView?.scrollObserver = { _, _ -> onChildScroll(index, slot, page) }
         page.lifecycleScope.launch {
             page.awaitLoaded()
             if (slot.page === page) {
@@ -836,23 +822,22 @@ internal class ContinuousResourceScrollView(
             }
             reflowAnchor = null
             pendingNavigation = PendingNavigation(
-                generation = ++navigationGeneration,
                 index = anchor.index,
                 locator = anchor.locator,
                 anchorDeltaCss = anchor.deltaCss,
                 alignmentY = anchor.sampleScreenY,
-                reason = "reflow",
+                kind = NavigationKind.REFLOW,
             )
             updateWindow()
             resolvePendingNavigation()
-        }, 180)
+        }, REFLOW_RESTORE_DELAY_MS)
     }
 
     private fun measure(index: Int, slot: Slot, page: R2EpubPageFragment) {
         if (cssTransition != null) return
         val webView = page.webView ?: return
         val measurement = ++slot.measurementGeneration
-        val js = """(function(){var d=document.documentElement,b=document.body,r=b.getBoundingClientRect();return JSON.stringify({h:Math.ceil((r.bottom+window.scrollY)*(${webView.width}/window.innerWidth)),body:r.bottom,scroll:window.scrollY,scrollHeight:d.scrollHeight,clientHeight:d.clientHeight,innerWidth:window.innerWidth,style:d.getAttribute('style')});})()"""
+        val js = """(function(){var r=document.body.getBoundingClientRect();return JSON.stringify({h:Math.ceil((r.bottom+window.scrollY)*(${webView.width}/window.innerWidth)),innerWidth:window.innerWidth});})()"""
         webView.evaluateJavascript(js) { result ->
             if (slot.page !== page || slot.measurementGeneration != measurement) return@evaluateJavascript
             slot.adjustPending = false
@@ -916,7 +901,6 @@ internal class ContinuousResourceScrollView(
             const resolution=readium.resolveLocatorY($locatorJSON);
             return JSON.stringify({
               y:resolution===null?null:(resolution.y+${request.anchorDeltaCss})*(${webView.width}/window.innerWidth),
-              method:resolution===null?'progression':resolution.method,
               anchored:resolution!==null
             });
         })()"""
@@ -935,9 +919,9 @@ internal class ContinuousResourceScrollView(
                     extent = slot.extent
                 )
                 if (localY == null) {
-                    Timber.e("navigate-unresolved generation=${request.generation} href=${request.locator.href}")
+                    Timber.w("navigate-unresolved href=${request.locator.href}")
                     pendingNavigation = null
-                    failInitialLoad(request.index, "unresolved")
+                    failInitialLoad(request.index, LoadFailure.UNRESOLVED)
                     scheduleUpdate()
                     return@evaluateJavascript
                 }
@@ -946,9 +930,9 @@ internal class ContinuousResourceScrollView(
                 request.resolving = false
                 prepareNavigationLanding(request)
             } catch (error: Exception) {
-                Timber.e(error, "navigate-error generation=${request.generation} result=$result")
+                Timber.e(error, "navigate-error result=$result")
                 pendingNavigation = null
-                failInitialLoad(request.index, "error")
+                failInitialLoad(request.index, LoadFailure.ERROR)
             }
         }
     }
@@ -961,9 +945,9 @@ internal class ContinuousResourceScrollView(
         val plan = landingPlan(extents, height, scrollY, request.index, localY, alignment, MAX_LIVE)
         val required = plan.required
         if (plan.overCapacity) {
-            Timber.e("navigate-capacity generation=${request.generation} target=${required.size}")
+            Timber.w("navigate-capacity target=${required.size} max=$MAX_LIVE")
             pendingNavigation = null
-            failInitialLoad(request.index, "capacity")
+            failInitialLoad(request.index, LoadFailure.CAPACITY)
             scheduleUpdate()
             return
         }
@@ -987,7 +971,7 @@ internal class ContinuousResourceScrollView(
             }
             val finalY = landingOffset(extents, height, request.index, localY, alignment)
             pendingNavigation = null
-            if (request.reason != "reflow") {
+            if (request.kind != NavigationKind.REFLOW) {
                 cachedAnchor = if (request.anchored) {
                     ViewportAnchor(request.index, request.locator, request.anchorDeltaCss, alignment)
                 } else {
@@ -1079,9 +1063,6 @@ internal class ContinuousResourceScrollView(
                             }
                         }
                     }
-                    if (start < scrollY + height && start + slot.extent > scrollY && webView.scrollY != local) {
-                        Timber.e("clamp index=$index requested=$local actual=${webView.scrollY}")
-                    }
                 }
             }
             start += slot.extent
@@ -1092,5 +1073,46 @@ internal class ContinuousResourceScrollView(
         private const val MAX_LIVE = 6
         private const val CSS_TRANSITION_DEADLINE_MS = 1000L
         private const val LOAD_TIMEOUT_MS = 10_000L
+
+        /** Without a scroll change for this long, a gesture or a fling is over. */
+        private const val IDLE_DELAY_MS = 250L
+
+        /** The text at the viewport centre is captured this long after the last scroll change. */
+        private const val ANCHOR_CAPTURE_DELAY_MS = 100L
+
+        /** Layout reports that arrive within this time are restored as one change. */
+        private const val REFLOW_RESTORE_DELAY_MS = 180L
+
+        /** A style report within this time of a preference change repeats that change. */
+        private const val CSS_REPORT_IGNORE_MS = 500L
     }
 }
+
+private enum class NavigationKind {
+    /** A request of the navigator's owner. */
+    JUMP,
+
+    /** The surface puts the reading position back after a layout change. */
+    REFLOW,
+}
+
+/**
+ * Why a preference transaction ends before its commit.
+ *
+ * @param teardown The surface goes away; queued style changes are dropped, not applied.
+ * @param degraded The style change is applied without keeping the reading position, for a
+ * reason other than the reader's own action.
+ */
+private enum class CssCancel(val teardown: Boolean = false, val degraded: Boolean = false) {
+    DISPOSE(teardown = true),
+    DETACH(teardown = true),
+    TOUCH,
+    VIEWPORT,
+    DEADLINE(degraded = true),
+    ANCHOR_LOST(degraded = true),
+    ANCHOR_PAGE_UNLOADED(degraded = true),
+    ANCHOR_UNRESOLVED_AFTER_CSS(degraded = true),
+    QUERY_ERROR,
+}
+
+private enum class LoadFailure { TIMEOUT, WINDOW_CAPACITY, UNRESOLVED, ERROR, CAPACITY }
