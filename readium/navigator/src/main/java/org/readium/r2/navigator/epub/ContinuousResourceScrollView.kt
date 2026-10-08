@@ -240,14 +240,15 @@ internal class ContinuousResourceScrollView(
             return
         }
         if (flingScroller.computeScrollOffset()) {
-            val range = (column.height - height).coerceAtLeast(0)
-            val target = (flingScroller.currY + flingBias).coerceIn(0, range)
-            if (target != scrollY) scrollTo(scrollX, target)
-            if ((target == 0 && flingScroller.currVelocity > 0f && flingScroller.finalY + flingBias < 0) ||
-                (target == range && flingScroller.finalY + flingBias > range)
-            ) {
-                flingScroller.abortAnimation()
-            }
+            val step = flingStep(
+                currY = flingScroller.currY,
+                finalY = flingScroller.finalY,
+                currVelocity = flingScroller.currVelocity,
+                bias = flingBias,
+                range = (column.height - height).coerceAtLeast(0)
+            )
+            if (step.target != scrollY) scrollTo(scrollX, step.target)
+            if (step.abort) flingScroller.abortAnimation()
             postInvalidateOnAnimation()
         }
     }
@@ -265,19 +266,12 @@ internal class ContinuousResourceScrollView(
 
     val activeResourceIndex: Int get() = resourceAt(scrollY)
 
-    fun resourceAt(globalY: Int): Int {
-        var start = 0
-        for (index in slots.indices) {
-            if (globalY < start + slots[index].extent) return index
-            start += slots[index].extent
-        }
-        return slots.lastIndex.coerceAtLeast(0)
-    }
+    private val extents: List<Int> get() = slots.map { it.extent }
 
-    fun resourceProgression(index: Int, globalY: Int): Double {
-        val start = slots.take(index).sumOf { it.extent }
-        return ((globalY - start).toDouble() / slots[index].extent.coerceAtLeast(1)).coerceIn(0.0, 1.0)
-    }
+    fun resourceAt(globalY: Int): Int = resourceAt(extents, globalY)
+
+    fun resourceProgression(index: Int, globalY: Int): Double =
+        resourceProgression(extents, index, globalY)
 
     val currentPage: R2EpubPageFragment? get() = slots.getOrNull(activeResourceIndex)?.page
 
@@ -723,29 +717,19 @@ internal class ContinuousResourceScrollView(
 
     private fun updateWindow() {
         if (height <= 0 || slots.isEmpty() || fragments.isStateSaved) return
-        val first = activeResourceIndex
-        var end = 0
-        var lastVisible = first
-        slots.forEachIndexed { index, slot ->
-            val start = end
-            end += slot.extent
-            if (start < scrollY + height && end > scrollY) lastVisible = index
-        }
-        val visible = (first..lastVisible).toSet()
         val request = pendingNavigation
         val required = if (request == null) {
             emptySet()
         } else {
             request.preparedIndices.ifEmpty { setOf(request.index) }
         }
-        if ((visible + required).size > MAX_LIVE) {
-            Timber.e("window capacity visible=${visible.size} required=${required.size} max=$MAX_LIVE")
+        val window = liveWindow(extents, scrollY, height, required, MAX_LIVE)
+        if (window.overCapacity) {
+            Timber.e("window capacity wanted=${window.wanted.size} required=${required.size} max=$MAX_LIVE")
             pendingNavigation = null
             failInitialLoad(request?.index, "window-capacity")
         }
-        val wanted = (visible + if (pendingNavigation == null) emptySet() else required).toMutableSet()
-        if (wanted.size < MAX_LIVE && first > 0) wanted.add(first - 1)
-        if (wanted.size < MAX_LIVE && lastVisible < slots.lastIndex) wanted.add(lastVisible + 1)
+        val wanted = window.wanted
         slots.forEachIndexed { index, slot ->
             if (index !in wanted && slot.page != null) unmount(index, slot)
         }
@@ -815,14 +799,17 @@ internal class ContinuousResourceScrollView(
             val scale = page.webView?.let { webView ->
                 webView.width.toDouble() / slot.cssViewportWidth.coerceAtLeast(1.0)
             } ?: 1.0
-            val extentChanged = kotlin.math.abs(data.getDouble("extentCssPx") * scale - slot.extent) > 1.0
-            val initial = reasonSet.contains("initial") || data.getInt("sequence") == 1
-            val changed = !initial && (reasonSet.contains("css") || extentChanged)
-            val visible = index in resourceAt(scrollY)..resourceAt(scrollY + height.coerceAtLeast(1) - 1)
-            val redundantCss = reasonSet.contains("css") && !extentChanged &&
-                android.os.SystemClock.uptimeMillis() < cssObserverIgnoreUntil
-            val restore = changed && visible && !redundantCss && !touchActive && !parentOwnsGesture && !coastingGesture
-            if (changed) {
+            val decision = geometryDecision(
+                reasons = reasonSet,
+                sequence = if (GEOMETRY_REASON_INITIAL in reasonSet) 1 else data.getInt("sequence"),
+                extentPx = data.getDouble("extentCssPx") * scale,
+                currentExtent = slot.extent,
+                visible = index in resourceAt(scrollY)..resourceAt(scrollY + height.coerceAtLeast(1) - 1),
+                inCssIgnoreWindow = android.os.SystemClock.uptimeMillis() < cssObserverIgnoreUntil,
+                readerIdle = readerIdle
+            )
+            val restore = decision.restore
+            if (decision.changed) {
                 if (restore && reflowAnchor == null && pendingNavigation == null) reflowAnchor = cachedAnchor
                 geometryEpoch++
                 pendingNavigation?.apply {
@@ -874,27 +861,29 @@ internal class ContinuousResourceScrollView(
                 val measured = max(1, data.getInt("h"))
                 slot.cssViewportWidth = data.getDouble("innerWidth")
                 val oldExtent = slot.extent
-                val delta = measured - oldExtent
-                val before = slots.take(index).sumOf { it.extent }
+                val before = resourceStart(extents, index)
                 slot.extent = measured
-                if (delta != 0) geometryEpoch++
+                if (measured != oldExtent) geometryEpoch++
                 slot.measured = true
                 slot.frame.layoutParams = (slot.frame.layoutParams as LinearLayout.LayoutParams).apply { height = measured }
-                val childAdjust = webView.scrollY - slot.commandedLocal
-                if (before + oldExtent <= scrollY && delta != 0) {
-                    shiftOffset(delta)
-                } else if (childAdjust != 0 && (
-                        delta == 0 || (childAdjust > 0) != (delta > 0) ||
-                            kotlin.math.abs(childAdjust) > kotlin.math.abs(delta)
-                        )
-                ) {
-                    // A scroll change without a matching extent change is not a layout adjustment.
-                    slot.rejectChildScroll = true
-                } else if (pendingNavigation == null && !slot.fresh &&
-                    childAdjust != 0 && before <= scrollY && scrollY < before + oldExtent
-                ) {
-                    slot.commandedLocal = webView.scrollY
-                    shiftOffset(childAdjust)
+                val decision = childScrollDecision(
+                    before = before,
+                    oldExtent = oldExtent,
+                    measured = measured,
+                    scrollY = scrollY,
+                    childScrollY = webView.scrollY,
+                    commandedLocal = slot.commandedLocal,
+                    navigationPending = pendingNavigation != null,
+                    fresh = slot.fresh
+                )
+                when (decision) {
+                    is ChildScrollDecision.ShiftBy -> shiftOffset(decision.dy)
+                    ChildScrollDecision.Reject -> slot.rejectChildScroll = true
+                    is ChildScrollDecision.Follow -> {
+                        slot.commandedLocal = webView.scrollY
+                        shiftOffset(decision.dy)
+                    }
+                    ChildScrollDecision.None -> Unit
                 }
                 if (!expectsNavigation && !navigationRequested && index == 0) reveal()
                 if (revealed && readerIdle) updateVisibleRegions()
@@ -940,18 +929,19 @@ internal class ContinuousResourceScrollView(
             }
             try {
                 val data = JSONObject(JSONTokener(result).nextValue() as String)
-                if (data.isNull("y") && request.locator.locations.progression == null) {
+                val localY = resolvedLocalY(
+                    y = if (data.isNull("y")) null else data.getDouble("y"),
+                    progression = request.locator.locations.progression,
+                    extent = slot.extent
+                )
+                if (localY == null) {
                     Timber.e("navigate-unresolved generation=${request.generation} href=${request.locator.href}")
                     pendingNavigation = null
                     failInitialLoad(request.index, "unresolved")
                     scheduleUpdate()
                     return@evaluateJavascript
                 }
-                request.localY = if (data.isNull("y")) {
-                    slot.extent * requireNotNull(request.locator.locations.progression)
-                } else {
-                    data.getDouble("y")
-                }
+                request.localY = localY
                 request.anchored = data.getBoolean("anchored")
                 request.resolving = false
                 prepareNavigationLanding(request)
@@ -968,14 +958,10 @@ internal class ContinuousResourceScrollView(
         if (pendingNavigation !== request || request.landingPosted) return
         val localY = request.localY ?: return
         val alignment = request.alignmentY ?: if (request.locator.text.highlight != null) height / 2 else 0
-        val globalY = (slots.take(request.index).sumOf { it.extent } + localY.toInt() - alignment)
-            .coerceIn(0, (slots.sumOf { it.extent } - height).coerceAtLeast(0))
-        val first = resourceAt(globalY)
-        val last = resourceAt((globalY + height - 1).coerceAtLeast(globalY))
-        val required = ((first..last).toSet() + request.index)
-        val current = (activeResourceIndex..resourceAt(scrollY + height - 1)).toSet()
-        if ((current + required).size > MAX_LIVE) {
-            Timber.e("navigate-capacity generation=${request.generation} current=${current.size} target=${required.size}")
+        val plan = landingPlan(extents, height, scrollY, request.index, localY, alignment, MAX_LIVE)
+        val required = plan.required
+        if (plan.overCapacity) {
+            Timber.e("navigate-capacity generation=${request.generation} target=${required.size}")
             pendingNavigation = null
             failInitialLoad(request.index, "capacity")
             scheduleUpdate()
@@ -987,7 +973,7 @@ internal class ContinuousResourceScrollView(
             return
         }
         if (required.any { !slots[it].ready || !slots[it].measured }) return
-        if (!stageDestination(request, required, globalY)) return
+        if (!stageDestination(request, required, plan.globalY)) return
         request.landingPosted = true
         val epoch = geometryEpoch
         post {
@@ -999,8 +985,7 @@ internal class ContinuousResourceScrollView(
                 resolvePendingNavigation()
                 return@post
             }
-            val finalY = (slots.take(request.index).sumOf { it.extent } + localY.toInt() - alignment)
-                .coerceIn(0, (slots.sumOf { it.extent } - height).coerceAtLeast(0))
+            val finalY = landingOffset(extents, height, request.index, localY, alignment)
             pendingNavigation = null
             if (request.reason != "reflow") {
                 cachedAnchor = if (request.anchored) {
