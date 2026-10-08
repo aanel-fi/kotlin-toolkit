@@ -217,6 +217,12 @@ public class EpubNavigatorFragment internal constructor(
         @ExperimentalReadiumApi
         var continuousScroll: Boolean,
 
+        /**
+         * Receives the events of the continuous surface; see [continuousScroll].
+         */
+        @ExperimentalReadiumApi
+        var continuousScrollListener: ContinuousScrollListener?,
+
         internal var fontFamilyDeclarations: List<FontFamilyDeclaration>,
         internal var javascriptInterfaces: Map<String, JavascriptInterfaceFactory>,
     ) {
@@ -236,6 +242,7 @@ public class EpubNavigatorFragment internal constructor(
             shouldApplyInsetsPadding = shouldApplyInsetsPadding,
             disableSelectionWhenProtected = true,
             continuousScroll = false,
+            continuousScrollListener = null,
             fontFamilyDeclarations = emptyList(),
             javascriptInterfaces = emptyMap()
         )
@@ -469,11 +476,15 @@ public class EpubNavigatorFragment internal constructor(
         parent.removeView(resourcePager)
         val resources = resourcesSingle.map { it as PageResource.EpubReflowable }
         continuousSurface = ContinuousResourceScrollView(
-            requireContext(),
-            childFragmentManager,
-            resources,
-            expectsNavigation,
-            ::notifyCurrentLocation
+            context = requireContext(),
+            fragments = childFragmentManager,
+            resources = resources,
+            expectsNavigation = expectsNavigation,
+            onPositionChanged = ::notifyCurrentLocation,
+            onFirstPositionShown = { config.continuousScrollListener?.onFirstPositionShown() },
+            onNavigationEnded = { locator, landed ->
+                config.continuousScrollListener?.onNavigationEnded(locator, landed)
+            }
         ).also { parent.addView(it, params) }
     }
 
@@ -1213,6 +1224,30 @@ public class EpubNavigatorFragment internal constructor(
 @ExperimentalReadiumApi
 private val EpubSettings.effectiveBackgroundColor: Int get() =
     backgroundColor?.int ?: theme.backgroundColor
+
+/**
+ * Events of the continuous surface that [EpubNavigatorFragment.Configuration.continuousScroll]
+ * enables. Every function is called on the main thread.
+ */
+@ExperimentalReadiumApi
+public interface ContinuousScrollListener {
+
+    /**
+     * The surface shows its content for the first time: the initial position, or the start of
+     * its resource when that position could not be resolved or did not load in time. Until this
+     * call the surface draws its background only and takes no touch.
+     */
+    public fun onFirstPositionShown() {}
+
+    /**
+     * A request made with [EpubNavigatorFragment.go] ended.
+     *
+     * @param landed The viewport is at [locator]. When false, the request was replaced by a newer
+     * one, cancelled by a scroll of the user, or could not be honored, and the position did not
+     * change because of it.
+     */
+    public fun onNavigationEnded(locator: Locator, landed: Boolean) {}
+}
 
 /**
  * Whether the resources are laid out on one continuous surface instead of the pager.
