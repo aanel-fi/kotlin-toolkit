@@ -41,17 +41,13 @@ internal fun resourceProgression(extents: List<Int>, index: Int, globalY: Int): 
         .coerceIn(0.0, 1.0)
 
 /**
- * The resources to keep mounted.
- *
- * @param overCapacity The visible range and [required] together exceed the cap. [wanted] then
- * holds the visible range without [required].
- */
-internal data class LiveWindow(val wanted: Set<Int>, val overCapacity: Boolean)
-
-/**
  * Chooses the resources to mount for a viewport at [scrollY]: the visible range, the resources a
  * pending navigation [required], and one neighbor on each side of the visible range while the
  * window is below [maxLive].
+ *
+ * [maxLive] bounds the neighbors only. Everything on the screen is mounted, and so is everything
+ * a navigation needs: a jump shows its target while the place it left is still on the screen, so
+ * for the time of a jump the window holds both.
  */
 internal fun liveWindow(
     extents: List<Int>,
@@ -59,7 +55,7 @@ internal fun liveWindow(
     height: Int,
     required: Set<Int>,
     maxLive: Int,
-): LiveWindow {
+): Set<Int> {
     val first = resourceAt(extents, scrollY)
     var end = 0
     var lastVisible = first
@@ -68,12 +64,10 @@ internal fun liveWindow(
         end += extent
         if (start < scrollY + height && end > scrollY) lastVisible = index
     }
-    val visible = (first..lastVisible).toSet()
-    val overCapacity = (visible + required).size > maxLive
-    val wanted = (visible + if (overCapacity) emptySet() else required).toMutableSet()
+    val wanted = ((first..lastVisible).toSet() + required).toMutableSet()
     if (wanted.size < maxLive && first > 0) wanted.add(first - 1)
     if (wanted.size < maxLive && lastVisible < extents.lastIndex) wanted.add(lastVisible + 1)
-    return LiveWindow(wanted, overCapacity)
+    return wanted
 }
 
 /**
@@ -81,9 +75,8 @@ internal fun liveWindow(
  *
  * @param globalY The offset of the viewport top after the landing.
  * @param required The resources on the screen after the landing, and the target resource.
- * @param overCapacity The resources on the screen now and [required] together exceed the cap.
  */
-internal data class LandingPlan(val globalY: Int, val required: Set<Int>, val overCapacity: Boolean)
+internal data class LandingPlan(val globalY: Int, val required: Set<Int>)
 
 /**
  * Plans a landing that puts the offset [localY] of the resource at [index] on the line
@@ -92,18 +85,14 @@ internal data class LandingPlan(val globalY: Int, val required: Set<Int>, val ov
 internal fun landingPlan(
     extents: List<Int>,
     height: Int,
-    scrollY: Int,
     index: Int,
     localY: Double,
     alignment: Int,
-    maxLive: Int,
 ): LandingPlan {
     val globalY = landingOffset(extents, height, index, localY, alignment)
     val first = resourceAt(extents, globalY)
     val last = resourceAt(extents, (globalY + height - 1).coerceAtLeast(globalY))
-    val required = (first..last).toSet() + index
-    val current = (resourceAt(extents, scrollY)..resourceAt(extents, scrollY + height - 1)).toSet()
-    return LandingPlan(globalY, required, (current + required).size > maxLive)
+    return LandingPlan(globalY, (first..last).toSet() + index)
 }
 
 /**

@@ -780,12 +780,7 @@ internal class ContinuousResourceScrollView(
         } else {
             request.preparedIndices.ifEmpty { setOf(request.index) }
         }
-        val window = liveWindow(extents, scrollY, height, required, MAX_LIVE)
-        if (window.overCapacity) {
-            request?.let { endNavigation(it, NavigationEnd.OVER_CAPACITY) }
-            failInitialLoad(request?.index, LoadFailure.WINDOW_CAPACITY)
-        }
-        val wanted = window.wanted
+        val wanted = liveWindow(extents, scrollY, height, required, MAX_LIVE)
         slots.forEachIndexed { index, slot ->
             if (index !in wanted && slot.page != null) unmount(index, slot)
         }
@@ -1008,14 +1003,8 @@ internal class ContinuousResourceScrollView(
         if (pendingNavigation !== request || request.landingPosted) return
         val localY = request.localY ?: return
         val alignment = landingAlignment(request.alignmentY, request.centred, height)
-        val plan = landingPlan(extents, height, scrollY, request.index, localY, alignment, MAX_LIVE)
+        val plan = landingPlan(extents, height, request.index, localY, alignment)
         val required = plan.required
-        if (plan.overCapacity) {
-            endNavigation(request, NavigationEnd.OVER_CAPACITY)
-            failInitialLoad(request.index, LoadFailure.CAPACITY)
-            scheduleUpdate()
-            return
-        }
         if (request.preparedIndices != required) {
             request.preparedIndices = required
             scheduleUpdate()
@@ -1195,7 +1184,6 @@ private enum class NavigationEnd(val fault: Boolean = false) {
     SUPERSEDED,
     UNRESOLVED(fault = true),
     TIMED_OUT(fault = true),
-    OVER_CAPACITY(fault = true),
 }
 
-private enum class LoadFailure { TIMEOUT, WINDOW_CAPACITY, UNRESOLVED, ERROR, CAPACITY }
+private enum class LoadFailure { TIMEOUT, UNRESOLVED, ERROR }

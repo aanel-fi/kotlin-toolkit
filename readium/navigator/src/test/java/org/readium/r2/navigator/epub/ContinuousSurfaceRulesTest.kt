@@ -50,16 +50,16 @@ class ContinuousSurfaceRulesTest {
     @Test
     fun `the live window is the visible range and one neighbor on each side`() {
         val extents = List(4) { 1000 }
-        assertEquals(LiveWindow(setOf(0, 1), false), liveWindow(extents, 0, 800, emptySet(), 6))
-        assertEquals(LiveWindow(setOf(0, 1, 2), false), liveWindow(extents, 500, 800, emptySet(), 6))
-        assertEquals(LiveWindow(setOf(0, 1, 2), false), liveWindow(extents, 1000, 800, emptySet(), 6))
-        assertEquals(LiveWindow(setOf(2, 3), false), liveWindow(extents, 3200, 800, emptySet(), 6))
+        assertEquals(setOf(0, 1), liveWindow(extents, 0, 800, emptySet(), 6))
+        assertEquals(setOf(0, 1, 2), liveWindow(extents, 500, 800, emptySet(), 6))
+        assertEquals(setOf(0, 1, 2), liveWindow(extents, 1000, 800, emptySet(), 6))
+        assertEquals(setOf(2, 3), liveWindow(extents, 3200, 800, emptySet(), 6))
     }
 
     @Test
     fun `the live window holds the resources a navigation requires`() {
         assertEquals(
-            LiveWindow(setOf(0, 1, 3), false),
+            setOf(0, 1, 3),
             liveWindow(List(4) { 1000 }, 0, 800, setOf(3), 6)
         )
     }
@@ -67,15 +67,15 @@ class ContinuousSurfaceRulesTest {
     @Test
     fun `a full live window gets no neighbors`() {
         assertEquals(
-            LiveWindow(setOf(0, 1, 2, 3, 6, 7), false),
+            setOf(0, 1, 2, 3, 6, 7),
             liveWindow(List(8) { 200 }, 0, 800, setOf(6, 7), 6)
         )
     }
 
     @Test
-    fun `a required set that does not fit is dropped`() {
+    fun `the resources a navigation requires are mounted with the visible range, past the cap`() {
         assertEquals(
-            LiveWindow(setOf(0, 1, 2, 3, 4), true),
+            setOf(0, 1, 2, 3, 5, 6, 7),
             liveWindow(List(8) { 200 }, 0, 800, setOf(5, 6, 7), 6)
         )
     }
@@ -83,7 +83,7 @@ class ContinuousSurfaceRulesTest {
     @Test
     fun `a visible range larger than the cap stays whole`() {
         assertEquals(
-            LiveWindow((0..7).toSet(), true),
+            (0..7).toSet(),
             liveWindow(List(8) { 100 }, 0, 800, emptySet(), 6)
         )
     }
@@ -91,8 +91,8 @@ class ContinuousSurfaceRulesTest {
     @Test
     fun `a landing puts the target offset at the alignment line`() {
         val extents = List(10) { 1000 }
-        assertEquals(LandingPlan(5300, setOf(5, 6), false), landingPlan(extents, 800, 0, 5, 300.9, 0, 6))
-        assertEquals(LandingPlan(4900, setOf(4, 5), false), landingPlan(extents, 800, 0, 5, 300.9, 400, 6))
+        assertEquals(LandingPlan(5300, setOf(5, 6)), landingPlan(extents, 800, 5, 300.9, 0))
+        assertEquals(LandingPlan(4900, setOf(4, 5)), landingPlan(extents, 800, 5, 300.9, 400))
     }
 
     @Test
@@ -105,16 +105,16 @@ class ContinuousSurfaceRulesTest {
     @Test
     fun `a landing is clamped to the last offset`() {
         assertEquals(
-            LandingPlan(9200, setOf(9), false),
-            landingPlan(List(10) { 1000 }, 800, 0, 9, 900.0, 0, 6)
+            LandingPlan(9200, setOf(9)),
+            landingPlan(List(10) { 1000 }, 800, 9, 900.0, 0)
         )
     }
 
     @Test
-    fun `a landing that needs more resources than the cap is over capacity`() {
+    fun `a landing among short resources requires every resource it shows`() {
         assertEquals(
-            LandingPlan(2000, setOf(10, 11, 12, 13), true),
-            landingPlan(List(20) { 200 }, 800, 0, 10, 0.0, 0, 6)
+            LandingPlan(2000, setOf(10, 11, 12, 13)),
+            landingPlan(List(20) { 200 }, 800, 10, 0.0, 0)
         )
     }
 
