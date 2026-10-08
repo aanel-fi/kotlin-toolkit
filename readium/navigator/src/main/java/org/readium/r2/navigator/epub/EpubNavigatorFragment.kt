@@ -207,6 +207,16 @@ public class EpubNavigatorFragment internal constructor(
         @DelicateReadiumApi
         var disableSelectionWhenProtected: Boolean,
 
+        /**
+         * Lays out the resources of a reflowable publication on one vertical surface when scroll
+         * is enabled, so that the user scrolls from one resource into the next.
+         *
+         * Publications with vertical text or a fixed layout, and the paginated mode, are not
+         * affected.
+         */
+        @ExperimentalReadiumApi
+        var continuousScroll: Boolean,
+
         internal var fontFamilyDeclarations: List<FontFamilyDeclaration>,
         internal var javascriptInterfaces: Map<String, JavascriptInterfaceFactory>,
     ) {
@@ -225,6 +235,7 @@ public class EpubNavigatorFragment internal constructor(
             selectionActionModeCallback = selectionActionModeCallback,
             shouldApplyInsetsPadding = shouldApplyInsetsPadding,
             disableSelectionWhenProtected = true,
+            continuousScroll = false,
             fontFamilyDeclarations = emptyList(),
             javascriptInterfaces = emptyMap()
         )
@@ -410,7 +421,7 @@ public class EpubNavigatorFragment internal constructor(
         }
 
         resourcePager = binding.resourcePager
-        if (viewModel.isScrollEnabled.value && !viewModel.verticalText && publication.metadata.layout != Layout.FIXED) {
+        if (usesContinuousSurface(config.continuousScroll, viewModel.isScrollEnabled.value, viewModel.verticalText, publication.metadata.layout)) {
             val restored = savedInstanceState?.let {
                 BundleCompat.getParcelable(it, "locator", Locator::class.java)
             }
@@ -580,7 +591,7 @@ public class EpubNavigatorFragment internal constructor(
             continuousSurface = null
             parent?.addView(resourcePager)
         }
-        if (viewModel.isScrollEnabled.value && !viewModel.verticalText && publication.metadata.layout != Layout.FIXED) {
+        if (usesContinuousSurface(config.continuousScroll, viewModel.isScrollEnabled.value, viewModel.verticalText, publication.metadata.layout)) {
             showContinuousSurface(expectsNavigation = true)
         } else {
             resetResourcePager()
@@ -1202,3 +1213,14 @@ public class EpubNavigatorFragment internal constructor(
 @ExperimentalReadiumApi
 private val EpubSettings.effectiveBackgroundColor: Int get() =
     backgroundColor?.int ?: theme.backgroundColor
+
+/**
+ * Whether the resources are laid out on one continuous surface instead of the pager.
+ */
+internal fun usesContinuousSurface(
+    continuousScroll: Boolean,
+    scroll: Boolean,
+    verticalText: Boolean,
+    layout: Layout?,
+): Boolean =
+    continuousScroll && scroll && !verticalText && layout != Layout.FIXED
