@@ -7,6 +7,8 @@
 package org.readium.r2.navigator.epub
 
 import kotlin.math.abs
+import org.json.JSONException
+import org.json.JSONObject
 
 /*
  * The decision rules of [ContinuousResourceScrollView], as functions of plain values.
@@ -219,3 +221,33 @@ internal fun geometryDecision(
  */
 internal fun resolvedLocalY(y: Double?, progression: Double?, extent: Int): Double? =
     y ?: progression?.let { extent * it }
+
+/** A page's report of its layout, from the reflowable script's geometry observer. */
+internal data class GeometrySnapshot(val reasons: Set<String>, val sequence: Int, val extentCssPx: Double)
+
+/** The script's own report is a fraction of this; a longer one is not parsed. */
+internal const val MAX_GEOMETRY_SNAPSHOT_LENGTH: Int = 2048
+
+private const val MAX_GEOMETRY_REASONS = 8
+private const val MAX_EXTENT_CSS_PX = 10_000_000.0
+
+/**
+ * Reads a geometry report. The report arrives through a JavaScript interface that the
+ * publication's own scripts can call, so anything that is not the observer's shape is dropped:
+ * null is returned.
+ */
+internal fun parseGeometrySnapshot(json: String): GeometrySnapshot? {
+    if (json.length > MAX_GEOMETRY_SNAPSHOT_LENGTH) return null
+    return try {
+        val data = JSONObject(json)
+        val reasons = data.getJSONArray("reasons")
+        if (reasons.length() > MAX_GEOMETRY_REASONS) return null
+        val reasonSet = (0 until reasons.length()).map { reasons.get(it) as? String ?: return null }.toSet()
+        val sequence = data.get("sequence") as? Int ?: return null
+        val extent = (data.get("extentCssPx") as? Number)?.toDouble() ?: return null
+        if (sequence < 1 || !extent.isFinite() || extent < 0.0 || extent > MAX_EXTENT_CSS_PX) return null
+        GeometrySnapshot(reasonSet, sequence, extent)
+    } catch (error: JSONException) {
+        null
+    }
+}

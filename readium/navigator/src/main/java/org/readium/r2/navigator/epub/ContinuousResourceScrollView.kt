@@ -800,42 +800,36 @@ internal class ContinuousResourceScrollView(
         fragments.beginTransaction().remove(page).commitNowAllowingStateLoss()
     }
 
-    private fun onResourceGeometry(index: Int, slot: Slot, page: R2EpubPageFragment, snapshot: String) {
+    private fun onResourceGeometry(index: Int, slot: Slot, page: R2EpubPageFragment, json: String) {
+        val snapshot = parseGeometrySnapshot(json) ?: return
         if (cssTransition != null) {
             geometryDroppedDuringCss = true
             return
         }
-        try {
-            val data = JSONObject(snapshot)
-            val reasons = data.getJSONArray("reasons")
-            val reasonSet = (0 until reasons.length()).map { reasons.getString(it) }.toSet()
-            val scale = page.webView?.let { webView ->
-                webView.width.toDouble() / slot.cssViewportWidth.coerceAtLeast(1.0)
-            } ?: 1.0
-            val decision = geometryDecision(
-                reasons = reasonSet,
-                sequence = if (GEOMETRY_REASON_INITIAL in reasonSet) 1 else data.getInt("sequence"),
-                extentPx = data.getDouble("extentCssPx") * scale,
-                currentExtent = slot.extent,
-                visible = index in resourceAt(scrollY)..resourceAt(scrollY + height.coerceAtLeast(1) - 1),
-                inCssIgnoreWindow = android.os.SystemClock.uptimeMillis() < cssObserverIgnoreUntil,
-                readerIdle = readerIdle
-            )
-            val restore = decision.restore
-            if (decision.changed) {
-                if (restore && reflowAnchor == null && pendingNavigation == null) reflowAnchor = cachedAnchor
-                geometryEpoch++
-                pendingNavigation?.apply {
-                    localY = null
-                    preparedIndices = emptySet()
-                }
-                anchorCaptureGeneration++
+        val scale = page.webView?.let { webView ->
+            webView.width.toDouble() / slot.cssViewportWidth.coerceAtLeast(1.0)
+        } ?: 1.0
+        val decision = geometryDecision(
+            reasons = snapshot.reasons,
+            sequence = snapshot.sequence,
+            extentPx = snapshot.extentCssPx * scale,
+            currentExtent = slot.extent,
+            visible = index in resourceAt(scrollY)..resourceAt(scrollY + height.coerceAtLeast(1) - 1),
+            inCssIgnoreWindow = android.os.SystemClock.uptimeMillis() < cssObserverIgnoreUntil,
+            readerIdle = readerIdle
+        )
+        val restore = decision.restore
+        if (decision.changed) {
+            if (restore && reflowAnchor == null && pendingNavigation == null) reflowAnchor = cachedAnchor
+            geometryEpoch++
+            pendingNavigation?.apply {
+                localY = null
+                preparedIndices = emptySet()
             }
-            measure(index, slot, page)
-            if (restore && reflowAnchor != null) scheduleReflowRestore()
-        } catch (error: Exception) {
-            Timber.e(error, "geometry-error index=$index snapshot=$snapshot")
+            anchorCaptureGeneration++
         }
+        measure(index, slot, page)
+        if (restore && reflowAnchor != null) scheduleReflowRestore()
     }
 
     private fun scheduleReflowRestore() {
