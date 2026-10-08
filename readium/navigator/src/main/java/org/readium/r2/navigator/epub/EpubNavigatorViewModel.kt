@@ -58,7 +58,8 @@ internal class EpubNavigatorViewModel(
     // the navigator.
     private val decorationTemplates: HtmlDecorationTemplates = config.decorationTemplates.copy()
 
-    data class RunScriptCommand(val script: String, val scope: Scope) {
+    data class RunScriptCommand(val script: String, val scope: Scope, val kind: Kind = Kind.OTHER) {
+        enum class Kind { OTHER, READIUM_CSS }
         sealed class Scope {
             object CurrentResource : Scope()
             object LoadedResources : Scope()
@@ -133,7 +134,8 @@ internal class EpubNavigatorViewModel(
                         Event.RunScript(
                             RunScriptCommand(
                                 script = "readium.setCSSProperties(${JSONObject(properties.toMap())});",
-                                scope = RunScriptCommand.Scope.LoadedResources
+                                scope = RunScriptCommand.Scope.LoadedResources,
+                                kind = RunScriptCommand.Kind.READIUM_CSS
                             )
                         )
                     )

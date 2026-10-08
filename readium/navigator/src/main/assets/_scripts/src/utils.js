@@ -150,6 +150,20 @@ export function scrollToLocator(locator) {
   return scrollToRange(range);
 }
 
+export function resolveLocatorY(locator) {
+  const range = rangeFromLocator(locator);
+  if (!range) {
+    return null;
+  }
+
+  const rect = range.getBoundingClientRect();
+  const isText = Boolean(locator.text && locator.text.highlight);
+  return {
+    y: rect.top + window.scrollY + (isText ? rect.height / 2 : 0),
+    method: isText ? "text" : "element",
+  };
+}
+
 function scrollToRange(range) {
   return scrollToRect(range.getBoundingClientRect());
 }

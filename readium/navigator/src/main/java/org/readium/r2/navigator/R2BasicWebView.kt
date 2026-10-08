@@ -111,6 +111,15 @@ internal open class R2BasicWebView(context: Context, attrs: AttributeSet) : WebV
 
     var resourceUrl: AbsoluteUrl? = null
 
+    internal var resourceGeometryListener: ((String) -> Unit)? = null
+
+    internal var scrollObserver: ((Int, Int) -> Unit)? = null
+
+    @android.webkit.JavascriptInterface
+    fun onResourceGeometry(snapshot: String) {
+        post { resourceGeometryListener?.invoke(snapshot) }
+    }
+
     internal val scrollModeFlow = MutableStateFlow(false)
 
     /** Indicates that a user text selection is active. */
@@ -203,6 +212,7 @@ internal open class R2BasicWebView(context: Context, attrs: AttributeSet) : WebV
 
     override fun onScrollChanged(l: Int, t: Int, oldl: Int, oldt: Int) {
         super.onScrollChanged(l, t, oldl, oldt)
+        scrollObserver?.invoke(t, oldt)
         listener?.onProgressionChanged()
     }
 
