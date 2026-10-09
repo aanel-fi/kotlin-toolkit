@@ -131,7 +131,6 @@ internal class ContinuousResourceScrollView(
     }
 
     private fun beginReaderGesture() {
-        owedOffset = 0
         if (parentOwnsGesture) return
         parentOwnsGesture = true
         reflowAnchor = null
@@ -249,7 +248,9 @@ internal class ContinuousResourceScrollView(
     /**
      * The part of an offset change that the scroll range refused. A resource's new extent
      * reaches the range at the next layout pass, so at the end of the publication a move made
-     * before that pass is cut short; the rest is applied after the pass.
+     * before that pass is cut short; the rest is applied after the pass. A drag does not drop
+     * it: a drag moves the offset by distances, so the text keeps its place under the finger
+     * only when the rest is applied.
      */
     private var owedOffset = 0
 
