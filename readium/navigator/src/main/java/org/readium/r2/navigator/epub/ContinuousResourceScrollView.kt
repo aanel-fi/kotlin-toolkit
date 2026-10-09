@@ -131,6 +131,7 @@ internal class ContinuousResourceScrollView(
     }
 
     private fun beginReaderGesture() {
+        owedOffset = 0
         if (parentOwnsGesture) return
         parentOwnsGesture = true
         reflowAnchor = null
@@ -245,10 +246,34 @@ internal class ContinuousResourceScrollView(
         }
     }
 
+    /**
+     * The part of an offset change that the scroll range refused. A resource's new extent
+     * reaches the range at the next layout pass, so at the end of the publication a move made
+     * before that pass is cut short; the rest is applied after the pass.
+     */
+    private var owedOffset = 0
+
     /** Moves the offset for a geometry change. A fling in progress keeps its motion. */
     private fun shiftOffset(dy: Int) {
         if (!flingScroller.isFinished) flingBias += dy
+        val before = scrollY
         scrollBy(0, dy)
+        owedOffset += dy - (scrollY - before)
+    }
+
+    /** Moves the offset to [target]; see [owedOffset]. */
+    private fun moveTo(target: Int) {
+        scrollTo(0, target)
+        owedOffset = target - scrollY
+    }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        super.onLayout(changed, l, t, r, b)
+        val owed = owedOffset
+        if (owed == 0) return
+        // What the laid-out range still refuses is a true end stop.
+        owedOffset = 0
+        scrollBy(0, owed)
     }
 
     /**
@@ -1036,7 +1061,7 @@ internal class ContinuousResourceScrollView(
                 reflowGeneration++
             }
             slots.forEach { it.stagedLocal = null }
-            scrollTo(0, finalY)
+            moveTo(finalY)
             positionPages()
             reveal()
             updateVisibleRegions()
