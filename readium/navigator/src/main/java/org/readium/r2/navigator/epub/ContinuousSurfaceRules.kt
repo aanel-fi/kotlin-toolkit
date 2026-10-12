@@ -148,6 +148,8 @@ internal sealed interface ChildScrollDecision {
  * @param childScrollY The document's own scroll position, [commandedLocal] the one the surface
  * last wrote.
  * @param fresh The page has not taken its first commanded position yet.
+ * @param showsAccessibilityFocus The document scrolled to show the node that took accessibility
+ * focus. A WebView makes that scroll itself; the surface moves by it, wherever the resource is.
  */
 internal fun childScrollDecision(
     before: Int,
@@ -158,10 +160,13 @@ internal fun childScrollDecision(
     commandedLocal: Int,
     navigationPending: Boolean,
     fresh: Boolean,
+    showsAccessibilityFocus: Boolean = false,
 ): ChildScrollDecision {
     val delta = measured - oldExtent
     val childAdjust = childScrollY - commandedLocal
     return when {
+        showsAccessibilityFocus && !navigationPending && !fresh && delta == 0 && childAdjust != 0 ->
+            ChildScrollDecision.Follow(childAdjust)
         before + oldExtent <= scrollY && delta != 0 ->
             ChildScrollDecision.ShiftBy(delta)
         childAdjust != 0 && (
@@ -258,3 +263,15 @@ internal fun parseGeometrySnapshot(json: String): GeometrySnapshot? {
         null
     }
 }
+
+/** A document scroll this long after a node took accessibility focus is the scroll to that node. */
+internal const val ACCESSIBILITY_FOCUS_SCROLL_MS: Long = 1000L
+
+/**
+ * The part of a page's WebView, of [viewportHeight], that is below the viewport's lower edge.
+ *
+ * @param start Global offset of the resource's top, [commandedLocal] the scroll position the
+ * surface last wrote to its document.
+ */
+internal fun hiddenBottom(start: Int, commandedLocal: Int, scrollY: Int, viewportHeight: Int): Int =
+    (start + commandedLocal - scrollY).coerceIn(0, viewportHeight)

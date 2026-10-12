@@ -10,10 +10,14 @@ package org.readium.r2.navigator.epub
 
 import android.content.Context
 import android.graphics.Rect
+import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewTreeObserver
+import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+import android.webkit.WebView
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -56,6 +60,7 @@ internal class ContinuousResourceScrollView(
         var commandedLocal: Int = 0,
         var rejectChildScroll: Boolean = false,
         var hiddenTopCss: Int = 0,
+        var hiddenBottomCss: Int = 0,
         var stagedLocal: Int? = null,
         var fresh: Boolean = true,
         var freshLocal: Int = -1,
@@ -223,8 +228,9 @@ internal class ContinuousResourceScrollView(
     }
 
     /**
-     * A resource whose end is on screen has a WebView that extends above the screen. The
-     * document must select its scroll anchor in the part that the reader can see.
+     * A resource whose end is on screen has a WebView that extends above the screen, and one
+     * whose start is on screen has a WebView that extends below it. The document must select
+     * its scroll anchor, and show a node it scrolls to, in the part that the reader can see.
      */
     private fun updateVisibleRegions() {
         var start = 0
@@ -237,6 +243,15 @@ internal class ContinuousResourceScrollView(
                     slot.hiddenTopCss = hiddenTopCss
                     webView.evaluateJavascript(
                         "document.documentElement.style.scrollPaddingTop='${hiddenTopCss}px';",
+                        null
+                    )
+                }
+                val hiddenBottom = hiddenBottom(start, slot.commandedLocal, scrollY, height)
+                val hiddenBottomCss = Math.round(hiddenBottom * slot.cssViewportWidth / webView.width.coerceAtLeast(1)).toInt()
+                if (hiddenBottomCss != slot.hiddenBottomCss) {
+                    slot.hiddenBottomCss = hiddenBottomCss
+                    webView.evaluateJavascript(
+                        "document.documentElement.style.scrollPaddingBottom='${hiddenBottomCss}px';",
                         null
                     )
                 }
@@ -702,6 +717,24 @@ internal class ContinuousResourceScrollView(
         return handled
     }
 
+    /** Until this uptime, a document scroll is the page's scroll to its accessibility focus. */
+    private var accessibilityFocusScrollUntil = 0L
+
+    override fun onRequestSendAccessibilityEvent(child: View, event: AccessibilityEvent): Boolean {
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED) {
+            // Focus on a document's root node is on the page as a whole: the scroll that
+            // shows it goes to the document's start, which is not a place the reader chose.
+            val onNode = slots.any { slot ->
+                slot.page?.webView?.accessibilityNodeProvider
+                    ?.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+                    ?.let { it.isAccessibilityFocused && it.className != WebView::class.java.name } == true
+            }
+            accessibilityFocusScrollUntil =
+                if (onNode) SystemClock.uptimeMillis() + ACCESSIBILITY_FOCUS_SCROLL_MS else 0L
+        }
+        return super.onRequestSendAccessibilityEvent(child, event)
+    }
+
     override fun requestChildFocus(child: View, focused: View) {
         val visible = Rect()
         if (focused is R2BasicWebView && focused.getGlobalVisibleRect(visible) && !visible.isEmpty) {
@@ -945,7 +978,8 @@ internal class ContinuousResourceScrollView(
                     childScrollY = webView.scrollY,
                     commandedLocal = slot.commandedLocal,
                     navigationPending = pendingNavigation != null,
-                    fresh = slot.fresh
+                    fresh = slot.fresh,
+                    showsAccessibilityFocus = SystemClock.uptimeMillis() < accessibilityFocusScrollUntil
                 )
                 when (decision) {
                     is ChildScrollDecision.ShiftBy -> shiftOffset(decision.dy)

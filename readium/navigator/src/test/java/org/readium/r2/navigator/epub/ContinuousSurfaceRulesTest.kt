@@ -189,6 +189,68 @@ class ContinuousSurfaceRulesTest {
     }
 
     @Test
+    fun `a child scroll to the accessibility focus is followed`() {
+        // The viewport top is in the resource.
+        assertEquals(
+            ChildScrollDecision.Follow(700),
+            childScrollDecision(1000, 2000, 2000, 1500, 1200, 500, false, false, showsAccessibilityFocus = true)
+        )
+        assertEquals(
+            ChildScrollDecision.Follow(-300),
+            childScrollDecision(1000, 2000, 2000, 1500, 200, 500, false, false, showsAccessibilityFocus = true)
+        )
+        // The resource starts in the viewport, and ends above it.
+        assertEquals(
+            ChildScrollDecision.Follow(400),
+            childScrollDecision(1000, 2000, 2000, 600, 400, 0, false, false, showsAccessibilityFocus = true)
+        )
+        assertEquals(
+            ChildScrollDecision.Follow(-900),
+            childScrollDecision(1000, 2000, 2000, 3500, 300, 1200, false, false, showsAccessibilityFocus = true)
+        )
+    }
+
+    @Test
+    fun `a child scroll to the accessibility focus is not followed during a navigation or on a fresh page`() {
+        assertEquals(
+            ChildScrollDecision.Reject,
+            childScrollDecision(1000, 2000, 2000, 1500, 1200, 500, true, false, showsAccessibilityFocus = true)
+        )
+        assertEquals(
+            ChildScrollDecision.Reject,
+            childScrollDecision(1000, 2000, 2000, 1500, 1200, 500, false, true, showsAccessibilityFocus = true)
+        )
+    }
+
+    @Test
+    fun `an extent change keeps its rule while a node has accessibility focus`() {
+        assertEquals(
+            ChildScrollDecision.ShiftBy(200),
+            childScrollDecision(0, 1000, 1200, 1500, 0, 0, false, false, showsAccessibilityFocus = true)
+        )
+        assertEquals(
+            ChildScrollDecision.Follow(60),
+            childScrollDecision(1000, 2000, 2100, 1500, 560, 500, false, false, showsAccessibilityFocus = true)
+        )
+        assertEquals(
+            ChildScrollDecision.None,
+            childScrollDecision(1000, 2000, 2000, 1500, 500, 500, false, false, showsAccessibilityFocus = true)
+        )
+    }
+
+    @Test
+    fun `the hidden bottom is the part of a page's view below the viewport`() {
+        // The resource starts 600 px below the viewport top; its view starts with it.
+        assertEquals(600, hiddenBottom(start = 1600, commandedLocal = 0, scrollY = 1000, viewportHeight = 2400))
+        // The view follows the viewport inside the resource.
+        assertEquals(0, hiddenBottom(start = 0, commandedLocal = 1000, scrollY = 1000, viewportHeight = 2400))
+        // The resource ends in the viewport: the view extends above it, not below.
+        assertEquals(0, hiddenBottom(start = 0, commandedLocal = 600, scrollY = 1000, viewportHeight = 2400))
+        // Wholly below the viewport.
+        assertEquals(2400, hiddenBottom(start = 9000, commandedLocal = 0, scrollY = 1000, viewportHeight = 2400))
+    }
+
+    @Test
     fun `the first geometry report of a page changes nothing`() {
         assertEquals(
             GeometryDecision(changed = false, restore = false),
