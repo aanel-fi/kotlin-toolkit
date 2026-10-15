@@ -314,6 +314,34 @@ class ContinuousSurfaceRulesTest {
     }
 
     @Test
+    fun `the focus window closes when the surface moves to show the focus`() {
+        val window = AccessibilityFocusWindow().apply { nodeFocused(2, 1000) }
+        window.shownBySurface()
+        assertFalse(window.isOpenFor(2, 1001))
+    }
+
+    @Test
+    fun `a focused node cut by the lower edge moves to the middle of the band`() {
+        // A paragraph that starts in the lower half and continues below the edge.
+        assertEquals(658, accessibilityFocusShift(nodeTop = 1858, nodeBottom = 2400, bandTop = 0, bandBottom = 2400))
+        // A strip of a paragraph at the edge.
+        assertEquals(1160, accessibilityFocusShift(nodeTop = 2360, nodeBottom = 2400, bandTop = 0, bandBottom = 2400))
+        // The band does not start at the screen's top.
+        assertEquals(200, accessibilityFocusShift(nodeTop = 1500, nodeBottom = 2500, bandTop = 100, bandBottom = 2500))
+    }
+
+    @Test
+    fun `a focused node that the reader sees or that the WebView scrolls to does not move the offset`() {
+        // Wholly in the band.
+        assertEquals(0, accessibilityFocusShift(nodeTop = 1858, nodeBottom = 2300, bandTop = 0, bandBottom = 2400))
+        // It starts in the upper half: the reader reads it from its start.
+        assertEquals(0, accessibilityFocusShift(nodeTop = 600, nodeBottom = 2400, bandTop = 0, bandBottom = 2400))
+        // Its top is below or above the band: the WebView scrolls to it.
+        assertEquals(0, accessibilityFocusShift(nodeTop = 2400, nodeBottom = 2400, bandTop = 0, bandBottom = 2400))
+        assertEquals(0, accessibilityFocusShift(nodeTop = -200, nodeBottom = 300, bandTop = 0, bandBottom = 2400))
+    }
+
+    @Test
     fun `the hidden bottom is the part of a page's view below the viewport`() {
         // The resource starts 600 px below the viewport top; its view starts with it.
         assertEquals(600, hiddenBottom(start = 1600, commandedLocal = 0, scrollY = 1000, viewportHeight = 2400))

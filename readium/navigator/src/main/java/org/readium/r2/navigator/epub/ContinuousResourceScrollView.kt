@@ -721,6 +721,14 @@ internal class ContinuousResourceScrollView(
 
     private val accessibilityFocusWindow = AccessibilityFocusWindow()
 
+    /** A touch exploration is in progress; the node under the finger takes focus where it is. */
+    private var hovering = false
+
+    override fun dispatchHoverEvent(event: MotionEvent): Boolean {
+        hovering = event.actionMasked != MotionEvent.ACTION_HOVER_EXIT
+        return super.dispatchHoverEvent(event)
+    }
+
     override fun onRequestSendAccessibilityEvent(child: View, event: AccessibilityEvent): Boolean {
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED) {
             // Focus on a document's root node is on the page as a whole: the scroll that
@@ -737,9 +745,25 @@ internal class ContinuousResourceScrollView(
                 accessibilityFocusWindow.rootFocused()
             } else {
                 accessibilityFocusWindow.nodeFocused(index, SystemClock.uptimeMillis())
+                if (!hovering) showAccessibilityFocus(focused)
             }
         }
         return super.onRequestSendAccessibilityEvent(child, event)
+    }
+
+    /** Moves the offset so that [node], which took accessibility focus, is not cut by the lower edge. */
+    private fun showAccessibilityFocus(node: AccessibilityNodeInfo) {
+        if (pendingNavigation != null || parentOwnsGesture || touchActive) return
+        val bounds = Rect().also { node.getBoundsInScreen(it) }
+        val top = IntArray(2).also { getLocationOnScreen(it) }[1]
+        val dy = accessibilityFocusShift(bounds.top, bounds.bottom, top, top + height)
+        if (dy == 0) return
+        accessibilityFocusWindow.shownBySurface()
+        post {
+            if (disposed || pendingNavigation != null || parentOwnsGesture || touchActive) return@post
+            flingScroller.abortAnimation()
+            shiftOffset(dy)
+        }
     }
 
     override fun requestChildFocus(child: View, focused: View) {

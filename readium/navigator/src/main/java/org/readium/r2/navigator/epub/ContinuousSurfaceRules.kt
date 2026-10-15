@@ -292,6 +292,9 @@ internal class AccessibilityFocusWindow {
     /** The surface followed the scroll: a later document scroll is not the one to the focus. */
     fun followed() = close()
 
+    /** The surface itself moved to show the focus: the WebView makes no scroll to follow. */
+    fun shownBySurface() = close()
+
     fun readerGesture() = close()
 
     fun navigationStarted() = close()
@@ -303,6 +306,23 @@ internal class AccessibilityFocusWindow {
         index = -1
         until = 0L
     }
+}
+
+/**
+ * The offset move that shows a node which took accessibility focus, in screen pixels.
+ *
+ * A WebView scrolls to a focused node only when the node's top is outside the part of the page
+ * that the reader can see, and then puts that top at the middle of it. A node whose top is
+ * visible, in the lower half of the band, and which reaches the band's lower edge, is cut by
+ * that edge: the surface puts its top at the middle as the WebView would. Bounds that a WebView
+ * reports are clipped to the view, so a node that reaches the edge can continue below it.
+ *
+ * @param nodeTop The node's top, [nodeBottom] its bottom, and [bandTop], [bandBottom] the
+ * surface's visible extent, all on the screen.
+ */
+internal fun accessibilityFocusShift(nodeTop: Int, nodeBottom: Int, bandTop: Int, bandBottom: Int): Int {
+    val middle = (bandTop + bandBottom) / 2
+    return if (nodeTop in middle until bandBottom && nodeBottom >= bandBottom) nodeTop - middle else 0
 }
 
 /**
