@@ -7,7 +7,9 @@
 package org.readium.r2.navigator.epub
 
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import org.junit.Test
 
 class ContinuousSurfaceRulesTest {
@@ -253,6 +255,62 @@ class ContinuousSurfaceRulesTest {
             ChildScrollDecision.ShiftBy(200),
             childScrollDecision(0, 1000, 1200, 1500, 50, 0, false, false, showsAccessibilityFocus = true)
         )
+    }
+
+    @Test
+    fun `the focus window is open for the page whose node took focus`() {
+        val window = AccessibilityFocusWindow()
+        assertFalse(window.isOpenFor(2, 0))
+        window.nodeFocused(2, 1000)
+        assertTrue(window.isOpenFor(2, 1000))
+        assertFalse(window.isOpenFor(1, 1000))
+        assertFalse(window.isOpenFor(3, 1000))
+        assertFalse(window.isOpenFor(-1, 1000))
+    }
+
+    @Test
+    fun `the focus window closes after its time limit`() {
+        val window = AccessibilityFocusWindow()
+        window.nodeFocused(2, 1000)
+        assertTrue(window.isOpenFor(2, 1000 + ACCESSIBILITY_FOCUS_SCROLL_MS - 1))
+        assertFalse(window.isOpenFor(2, 1000 + ACCESSIBILITY_FOCUS_SCROLL_MS))
+    }
+
+    @Test
+    fun `a new focus moves the focus window to its page`() {
+        val window = AccessibilityFocusWindow()
+        window.nodeFocused(2, 1000)
+        window.nodeFocused(3, 1500)
+        assertFalse(window.isOpenFor(2, 1500))
+        assertTrue(window.isOpenFor(3, 1500 + ACCESSIBILITY_FOCUS_SCROLL_MS - 1))
+    }
+
+    @Test
+    fun `the focus window closes at the first scroll it follows`() {
+        val window = AccessibilityFocusWindow().apply { nodeFocused(2, 1000) }
+        window.followed()
+        assertFalse(window.isOpenFor(2, 1001))
+    }
+
+    @Test
+    fun `the focus window closes at a reader gesture`() {
+        val window = AccessibilityFocusWindow().apply { nodeFocused(2, 1000) }
+        window.readerGesture()
+        assertFalse(window.isOpenFor(2, 1001))
+    }
+
+    @Test
+    fun `the focus window closes when a navigation starts`() {
+        val window = AccessibilityFocusWindow().apply { nodeFocused(2, 1000) }
+        window.navigationStarted()
+        assertFalse(window.isOpenFor(2, 1001))
+    }
+
+    @Test
+    fun `the focus window closes when focus goes to a document's root node`() {
+        val window = AccessibilityFocusWindow().apply { nodeFocused(2, 1000) }
+        window.rootFocused()
+        assertFalse(window.isOpenFor(2, 1001))
     }
 
     @Test

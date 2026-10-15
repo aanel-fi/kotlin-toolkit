@@ -138,6 +138,7 @@ internal class ContinuousResourceScrollView(
     private fun beginReaderGesture() {
         if (parentOwnsGesture) return
         parentOwnsGesture = true
+        accessibilityFocusWindow.readerGesture()
         reflowAnchor = null
         reflowGeneration++
         pendingNavigation?.let { endNavigation(it, NavigationEnd.SUPERSEDED) }
@@ -402,6 +403,7 @@ internal class ContinuousResourceScrollView(
         reflowGeneration++
         val request = PendingNavigation(index, locator)
         pendingNavigation = request
+        accessibilityFocusWindow.navigationStarted()
         postDelayed({ endNavigation(request, NavigationEnd.TIMED_OUT) }, NAVIGATION_TIMEOUT_MS)
         if (cssIsPending) {
             return
@@ -717,20 +719,25 @@ internal class ContinuousResourceScrollView(
         return handled
     }
 
-    /** Until this uptime, a document scroll is the page's scroll to its accessibility focus. */
-    private var accessibilityFocusScrollUntil = 0L
+    private val accessibilityFocusWindow = AccessibilityFocusWindow()
 
     override fun onRequestSendAccessibilityEvent(child: View, event: AccessibilityEvent): Boolean {
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED) {
             // Focus on a document's root node is on the page as a whole: the scroll that
             // shows it goes to the document's start, which is not a place the reader chose.
-            val onNode = slots.any { slot ->
-                slot.page?.webView?.accessibilityNodeProvider
+            var node: AccessibilityNodeInfo? = null
+            val index = slots.indexOfFirst { slot ->
+                node = slot.page?.webView?.accessibilityNodeProvider
                     ?.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
-                    ?.let { it.isAccessibilityFocused && it.className != WebView::class.java.name } == true
+                    ?.takeIf { it.isAccessibilityFocused && it.className != WebView::class.java.name }
+                node != null
             }
-            accessibilityFocusScrollUntil =
-                if (onNode) SystemClock.uptimeMillis() + ACCESSIBILITY_FOCUS_SCROLL_MS else 0L
+            val focused = node
+            if (focused == null) {
+                accessibilityFocusWindow.rootFocused()
+            } else {
+                accessibilityFocusWindow.nodeFocused(index, SystemClock.uptimeMillis())
+            }
         }
         return super.onRequestSendAccessibilityEvent(child, event)
     }
@@ -947,6 +954,7 @@ internal class ContinuousResourceScrollView(
                 kind = NavigationKind.REFLOW,
             )
             pendingNavigation = request
+            accessibilityFocusWindow.navigationStarted()
             postDelayed({ endNavigation(request, NavigationEnd.TIMED_OUT) }, NAVIGATION_TIMEOUT_MS)
             updateWindow()
             resolvePendingNavigation()
@@ -971,6 +979,7 @@ internal class ContinuousResourceScrollView(
                 if (measured != oldExtent) geometryEpoch++
                 slot.measured = true
                 slot.frame.layoutParams = (slot.frame.layoutParams as LinearLayout.LayoutParams).apply { height = measured }
+                val followsFocus = accessibilityFocusWindow.isOpenFor(index, SystemClock.uptimeMillis())
                 val decision = childScrollDecision(
                     before = before,
                     oldExtent = oldExtent,
@@ -980,12 +989,13 @@ internal class ContinuousResourceScrollView(
                     commandedLocal = slot.commandedLocal,
                     navigationPending = pendingNavigation != null,
                     fresh = slot.fresh,
-                    showsAccessibilityFocus = SystemClock.uptimeMillis() < accessibilityFocusScrollUntil
+                    showsAccessibilityFocus = followsFocus
                 )
                 when (decision) {
                     is ChildScrollDecision.ShiftBy -> shiftOffset(decision.dy)
                     ChildScrollDecision.Reject -> slot.rejectChildScroll = true
                     is ChildScrollDecision.Follow -> {
+                        if (followsFocus) accessibilityFocusWindow.followed()
                         slot.commandedLocal = webView.scrollY
                         shiftOffset(decision.dy)
                     }

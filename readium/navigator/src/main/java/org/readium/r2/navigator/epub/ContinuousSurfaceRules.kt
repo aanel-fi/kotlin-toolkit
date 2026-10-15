@@ -148,8 +148,9 @@ internal sealed interface ChildScrollDecision {
  * @param childScrollY The document's own scroll position, [commandedLocal] the one the surface
  * last wrote.
  * @param fresh The page has not taken its first commanded position yet.
- * @param showsAccessibilityFocus The document scrolled to show the node that took accessibility
- * focus. A WebView makes that scroll itself; the surface moves by it, wherever the resource is.
+ * @param showsAccessibilityFocus The document scroll is taken as the scroll to the node that took
+ * accessibility focus. A WebView makes that scroll itself; the surface moves by it, wherever the
+ * resource is.
  */
 internal fun childScrollDecision(
     before: Int,
@@ -264,8 +265,45 @@ internal fun parseGeometrySnapshot(json: String): GeometrySnapshot? {
     }
 }
 
-/** A document scroll this long after a node took accessibility focus is the scroll to that node. */
+/**
+ * How long after a node took accessibility focus a document scroll of its page is taken as the
+ * page's scroll to that node. The page makes that scroll in its own process, so the surface
+ * sees it only later.
+ */
 internal const val ACCESSIBILITY_FOCUS_SCROLL_MS: Long = 1000L
+
+/**
+ * The page whose next document scroll the surface follows as the scroll to its accessibility
+ * focus. A node of that page that takes focus opens it; it is open for that page only, for
+ * [ACCESSIBILITY_FOCUS_SCROLL_MS] at most.
+ */
+internal class AccessibilityFocusWindow {
+    private var index = -1
+    private var until = 0L
+
+    fun nodeFocused(index: Int, now: Long) {
+        this.index = index
+        until = now + ACCESSIBILITY_FOCUS_SCROLL_MS
+    }
+
+    /** Focus on a document's root node: the scroll that shows it is not a place the reader chose. */
+    fun rootFocused() = close()
+
+    /** The surface followed the scroll: a later document scroll is not the one to the focus. */
+    fun followed() = close()
+
+    fun readerGesture() = close()
+
+    fun navigationStarted() = close()
+
+    fun isOpenFor(index: Int, now: Long): Boolean =
+        index >= 0 && index == this.index && now < until
+
+    private fun close() {
+        index = -1
+        until = 0L
+    }
+}
 
 /**
  * The part of a page's WebView, of [viewportHeight], that is below the viewport's lower edge.
