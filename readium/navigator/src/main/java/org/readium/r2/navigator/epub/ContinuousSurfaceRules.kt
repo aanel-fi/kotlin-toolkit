@@ -320,6 +320,10 @@ internal const val TOUCH_FOCUS_WINDOW_MS: Long = 1200L
  * hover arrived, at [lastHover], within [TOUCH_FOCUS_WINDOW_MS] before. The node under the
  * finger takes focus where it is. Times are the arrival uptimes, not the events' own times: a
  * screen reader sends a tap's hovers after the tap, with the tap's earlier times.
+ *
+ * A swipe to the next or previous element sends no hover, but one that comes within the window
+ * after a touch counts as the touch's: its node, if the lower edge cuts it, is not moved into
+ * view.
  */
 internal fun focusFromTouch(now: Long, lastHover: Long?, exploring: Boolean): Boolean =
     exploring || (lastHover != null && now - lastHover in 0..TOUCH_FOCUS_WINDOW_MS)

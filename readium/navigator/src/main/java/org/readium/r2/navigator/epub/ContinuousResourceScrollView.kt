@@ -11,11 +11,13 @@ package org.readium.r2.navigator.epub
 import android.content.Context
 import android.graphics.Rect
 import android.os.SystemClock
+import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewTreeObserver
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
 import android.webkit.WebView
 import android.widget.FrameLayout
@@ -724,12 +726,21 @@ internal class ContinuousResourceScrollView(
     /** The uptime at which the last hover event arrived, null before the first: see [focusFromTouch]. */
     private var lastHoverAt: Long? = null
 
-    /** A touch exploration is in progress: a hover has come and its exit has not. */
+    /** A touch exploration is in progress: a touchscreen hover has come and its exit has not. */
     private var exploring = false
 
+    private val accessibilityManager =
+        context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+
+    /**
+     * Records the hovers of a touch exploration: from the touchscreen while a screen reader
+     * explores by touch. A mouse or a stylus that rests over the text is not one.
+     */
     override fun dispatchHoverEvent(event: MotionEvent): Boolean {
-        lastHoverAt = SystemClock.uptimeMillis()
-        exploring = event.actionMasked != MotionEvent.ACTION_HOVER_EXIT
+        if (event.isFromSource(InputDevice.SOURCE_TOUCHSCREEN) && accessibilityManager?.isTouchExplorationEnabled == true) {
+            lastHoverAt = SystemClock.uptimeMillis()
+            exploring = event.actionMasked != MotionEvent.ACTION_HOVER_EXIT
+        }
         return super.dispatchHoverEvent(event)
     }
 
@@ -748,8 +759,9 @@ internal class ContinuousResourceScrollView(
             if (focused == null) {
                 accessibilityFocusWindow.rootFocused()
             } else {
-                accessibilityFocusWindow.nodeFocused(index, SystemClock.uptimeMillis())
-                if (!focusFromTouch(SystemClock.uptimeMillis(), lastHoverAt, exploring)) showAccessibilityFocus(focused)
+                val now = SystemClock.uptimeMillis()
+                accessibilityFocusWindow.nodeFocused(index, now)
+                if (!focusFromTouch(now, lastHoverAt, exploring)) showAccessibilityFocus(focused)
             }
         }
         return super.onRequestSendAccessibilityEvent(child, event)
