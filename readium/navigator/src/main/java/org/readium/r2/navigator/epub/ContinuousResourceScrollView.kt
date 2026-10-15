@@ -721,11 +721,15 @@ internal class ContinuousResourceScrollView(
 
     private val accessibilityFocusWindow = AccessibilityFocusWindow()
 
-    /** The uptime of the last hover event, null before the first: see [focusFromTouch]. */
+    /** The uptime at which the last hover event arrived, null before the first: see [focusFromTouch]. */
     private var lastHoverAt: Long? = null
 
+    /** A touch exploration is in progress: a hover has come and its exit has not. */
+    private var exploring = false
+
     override fun dispatchHoverEvent(event: MotionEvent): Boolean {
-        lastHoverAt = event.eventTime
+        lastHoverAt = SystemClock.uptimeMillis()
+        exploring = event.actionMasked != MotionEvent.ACTION_HOVER_EXIT
         return super.dispatchHoverEvent(event)
     }
 
@@ -745,7 +749,7 @@ internal class ContinuousResourceScrollView(
                 accessibilityFocusWindow.rootFocused()
             } else {
                 accessibilityFocusWindow.nodeFocused(index, SystemClock.uptimeMillis())
-                if (!focusFromTouch(SystemClock.uptimeMillis(), lastHoverAt)) showAccessibilityFocus(focused)
+                if (!focusFromTouch(SystemClock.uptimeMillis(), lastHoverAt, exploring)) showAccessibilityFocus(focused)
             }
         }
         return super.onRequestSendAccessibilityEvent(child, event)
