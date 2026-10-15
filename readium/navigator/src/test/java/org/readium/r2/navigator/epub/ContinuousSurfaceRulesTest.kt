@@ -199,11 +199,12 @@ class ContinuousSurfaceRulesTest {
             ChildScrollDecision.Follow(-300),
             childScrollDecision(1000, 2000, 2000, 1500, 200, 500, false, false, showsAccessibilityFocus = true)
         )
-        // The resource starts in the viewport, and ends above it.
+        // The resource starts in the viewport.
         assertEquals(
             ChildScrollDecision.Follow(400),
             childScrollDecision(1000, 2000, 2000, 600, 400, 0, false, false, showsAccessibilityFocus = true)
         )
+        // The resource is wholly above the viewport.
         assertEquals(
             ChildScrollDecision.Follow(-900),
             childScrollDecision(1000, 2000, 2000, 3500, 300, 1200, false, false, showsAccessibilityFocus = true)
@@ -235,6 +236,22 @@ class ContinuousSurfaceRulesTest {
         assertEquals(
             ChildScrollDecision.None,
             childScrollDecision(1000, 2000, 2000, 1500, 500, 500, false, false, showsAccessibilityFocus = true)
+        )
+    }
+
+    @Test
+    fun `a document scroll larger than an extent change is rejected while a node has accessibility focus`() {
+        assertEquals(
+            ChildScrollDecision.Reject,
+            childScrollDecision(1000, 2000, 2100, 1500, 650, 500, false, false, showsAccessibilityFocus = true)
+        )
+    }
+
+    @Test
+    fun `a resource above the viewport moves the offset by its extent change while a node has accessibility focus`() {
+        assertEquals(
+            ChildScrollDecision.ShiftBy(200),
+            childScrollDecision(0, 1000, 1200, 1500, 50, 0, false, false, showsAccessibilityFocus = true)
         )
     }
 
