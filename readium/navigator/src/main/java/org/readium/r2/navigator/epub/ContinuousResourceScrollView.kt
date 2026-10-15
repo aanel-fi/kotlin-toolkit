@@ -721,11 +721,11 @@ internal class ContinuousResourceScrollView(
 
     private val accessibilityFocusWindow = AccessibilityFocusWindow()
 
-    /** A touch exploration is in progress; the node under the finger takes focus where it is. */
-    private var hovering = false
+    /** The uptime of the last hover event, null before the first: see [focusFromTouch]. */
+    private var lastHoverAt: Long? = null
 
     override fun dispatchHoverEvent(event: MotionEvent): Boolean {
-        hovering = event.actionMasked != MotionEvent.ACTION_HOVER_EXIT
+        lastHoverAt = event.eventTime
         return super.dispatchHoverEvent(event)
     }
 
@@ -745,7 +745,7 @@ internal class ContinuousResourceScrollView(
                 accessibilityFocusWindow.rootFocused()
             } else {
                 accessibilityFocusWindow.nodeFocused(index, SystemClock.uptimeMillis())
-                if (!hovering) showAccessibilityFocus(focused)
+                if (!focusFromTouch(SystemClock.uptimeMillis(), lastHoverAt)) showAccessibilityFocus(focused)
             }
         }
         return super.onRequestSendAccessibilityEvent(child, event)
