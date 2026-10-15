@@ -10,10 +10,14 @@ package org.readium.r2.navigator.epub
 
 import android.content.Context
 import android.graphics.Rect
+import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewTreeObserver
+import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+import android.webkit.WebView
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -56,6 +60,7 @@ internal class ContinuousResourceScrollView(
         var commandedLocal: Int = 0,
         var rejectChildScroll: Boolean = false,
         var hiddenTopCss: Int = 0,
+        var hiddenBottomCss: Int = 0,
         var stagedLocal: Int? = null,
         var fresh: Boolean = true,
         var freshLocal: Int = -1,
@@ -133,6 +138,7 @@ internal class ContinuousResourceScrollView(
     private fun beginReaderGesture() {
         if (parentOwnsGesture) return
         parentOwnsGesture = true
+        accessibilityFocusWindow.readerGesture()
         reflowAnchor = null
         reflowGeneration++
         pendingNavigation?.let { endNavigation(it, NavigationEnd.SUPERSEDED) }
@@ -223,8 +229,9 @@ internal class ContinuousResourceScrollView(
     }
 
     /**
-     * A resource whose end is on screen has a WebView that extends above the screen. The
-     * document must select its scroll anchor in the part that the reader can see.
+     * A resource whose end is on screen has a WebView that extends above the screen, and one
+     * whose start is on screen has a WebView that extends below it. The document must select
+     * its scroll anchor, and show a node it scrolls to, in the part that the reader can see.
      */
     private fun updateVisibleRegions() {
         var start = 0
@@ -237,6 +244,15 @@ internal class ContinuousResourceScrollView(
                     slot.hiddenTopCss = hiddenTopCss
                     webView.evaluateJavascript(
                         "document.documentElement.style.scrollPaddingTop='${hiddenTopCss}px';",
+                        null
+                    )
+                }
+                val hiddenBottom = hiddenBottom(start, slot.commandedLocal, scrollY, height)
+                val hiddenBottomCss = Math.round(hiddenBottom * slot.cssViewportWidth / webView.width.coerceAtLeast(1)).toInt()
+                if (hiddenBottomCss != slot.hiddenBottomCss) {
+                    slot.hiddenBottomCss = hiddenBottomCss
+                    webView.evaluateJavascript(
+                        "document.documentElement.style.scrollPaddingBottom='${hiddenBottomCss}px';",
                         null
                     )
                 }
@@ -387,6 +403,7 @@ internal class ContinuousResourceScrollView(
         reflowGeneration++
         val request = PendingNavigation(index, locator)
         pendingNavigation = request
+        accessibilityFocusWindow.navigationStarted()
         postDelayed({ endNavigation(request, NavigationEnd.TIMED_OUT) }, NAVIGATION_TIMEOUT_MS)
         if (cssIsPending) {
             return
@@ -702,6 +719,53 @@ internal class ContinuousResourceScrollView(
         return handled
     }
 
+    private val accessibilityFocusWindow = AccessibilityFocusWindow()
+
+    /** A touch exploration is in progress; the node under the finger takes focus where it is. */
+    private var hovering = false
+
+    override fun dispatchHoverEvent(event: MotionEvent): Boolean {
+        hovering = event.actionMasked != MotionEvent.ACTION_HOVER_EXIT
+        return super.dispatchHoverEvent(event)
+    }
+
+    override fun onRequestSendAccessibilityEvent(child: View, event: AccessibilityEvent): Boolean {
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED) {
+            // Focus on a document's root node is on the page as a whole: the scroll that
+            // shows it goes to the document's start, which is not a place the reader chose.
+            var node: AccessibilityNodeInfo? = null
+            val index = slots.indexOfFirst { slot ->
+                node = slot.page?.webView?.accessibilityNodeProvider
+                    ?.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+                    ?.takeIf { it.isAccessibilityFocused && it.className != WebView::class.java.name }
+                node != null
+            }
+            val focused = node
+            if (focused == null) {
+                accessibilityFocusWindow.rootFocused()
+            } else {
+                accessibilityFocusWindow.nodeFocused(index, SystemClock.uptimeMillis())
+                if (!hovering) showAccessibilityFocus(focused)
+            }
+        }
+        return super.onRequestSendAccessibilityEvent(child, event)
+    }
+
+    /** Moves the offset so that [node], which took accessibility focus, is not cut by the lower edge. */
+    private fun showAccessibilityFocus(node: AccessibilityNodeInfo) {
+        if (pendingNavigation != null || parentOwnsGesture || touchActive) return
+        val bounds = Rect().also { node.getBoundsInScreen(it) }
+        val top = IntArray(2).also { getLocationOnScreen(it) }[1]
+        val dy = accessibilityFocusShift(bounds.top, bounds.bottom, top, top + height)
+        if (dy == 0) return
+        accessibilityFocusWindow.shownBySurface()
+        post {
+            if (disposed || pendingNavigation != null || parentOwnsGesture || touchActive) return@post
+            flingScroller.abortAnimation()
+            shiftOffset(dy)
+        }
+    }
+
     override fun requestChildFocus(child: View, focused: View) {
         val visible = Rect()
         if (focused is R2BasicWebView && focused.getGlobalVisibleRect(visible) && !visible.isEmpty) {
@@ -828,6 +892,7 @@ internal class ContinuousResourceScrollView(
         page.view?.layoutParams = FrameLayout.LayoutParams(-1, height)
         slot.commandedLocal = 0
         slot.hiddenTopCss = 0
+        slot.hiddenBottomCss = 0
         slot.fresh = true
         slot.freshLocal = -1
         slot.adjustPending = false
@@ -913,6 +978,7 @@ internal class ContinuousResourceScrollView(
                 kind = NavigationKind.REFLOW,
             )
             pendingNavigation = request
+            accessibilityFocusWindow.navigationStarted()
             postDelayed({ endNavigation(request, NavigationEnd.TIMED_OUT) }, NAVIGATION_TIMEOUT_MS)
             updateWindow()
             resolvePendingNavigation()
@@ -937,6 +1003,7 @@ internal class ContinuousResourceScrollView(
                 if (measured != oldExtent) geometryEpoch++
                 slot.measured = true
                 slot.frame.layoutParams = (slot.frame.layoutParams as LinearLayout.LayoutParams).apply { height = measured }
+                val followsFocus = accessibilityFocusWindow.isOpenFor(index, SystemClock.uptimeMillis())
                 val decision = childScrollDecision(
                     before = before,
                     oldExtent = oldExtent,
@@ -945,12 +1012,14 @@ internal class ContinuousResourceScrollView(
                     childScrollY = webView.scrollY,
                     commandedLocal = slot.commandedLocal,
                     navigationPending = pendingNavigation != null,
-                    fresh = slot.fresh
+                    fresh = slot.fresh,
+                    showsAccessibilityFocus = followsFocus
                 )
                 when (decision) {
                     is ChildScrollDecision.ShiftBy -> shiftOffset(decision.dy)
                     ChildScrollDecision.Reject -> slot.rejectChildScroll = true
                     is ChildScrollDecision.Follow -> {
+                        if (followsFocus) accessibilityFocusWindow.followed()
                         slot.commandedLocal = webView.scrollY
                         shiftOffset(decision.dy)
                     }

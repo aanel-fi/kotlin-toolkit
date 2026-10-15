@@ -7,7 +7,9 @@
 package org.readium.r2.navigator.epub
 
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import org.junit.Test
 
 class ContinuousSurfaceRulesTest {
@@ -186,6 +188,169 @@ class ContinuousSurfaceRulesTest {
             ChildScrollDecision.None,
             childScrollDecision(1000, 2000, 2000, 1500, 500, 500, false, false)
         )
+    }
+
+    @Test
+    fun `a child scroll to the accessibility focus is followed`() {
+        // The viewport top is in the resource.
+        assertEquals(
+            ChildScrollDecision.Follow(700),
+            childScrollDecision(1000, 2000, 2000, 1500, 1200, 500, false, false, showsAccessibilityFocus = true)
+        )
+        assertEquals(
+            ChildScrollDecision.Follow(-300),
+            childScrollDecision(1000, 2000, 2000, 1500, 200, 500, false, false, showsAccessibilityFocus = true)
+        )
+        // The resource starts in the viewport.
+        assertEquals(
+            ChildScrollDecision.Follow(400),
+            childScrollDecision(1000, 2000, 2000, 600, 400, 0, false, false, showsAccessibilityFocus = true)
+        )
+        // The resource is wholly above the viewport.
+        assertEquals(
+            ChildScrollDecision.Follow(-900),
+            childScrollDecision(1000, 2000, 2000, 3500, 300, 1200, false, false, showsAccessibilityFocus = true)
+        )
+    }
+
+    @Test
+    fun `a child scroll to the accessibility focus is not followed during a navigation or on a fresh page`() {
+        assertEquals(
+            ChildScrollDecision.Reject,
+            childScrollDecision(1000, 2000, 2000, 1500, 1200, 500, true, false, showsAccessibilityFocus = true)
+        )
+        assertEquals(
+            ChildScrollDecision.Reject,
+            childScrollDecision(1000, 2000, 2000, 1500, 1200, 500, false, true, showsAccessibilityFocus = true)
+        )
+    }
+
+    @Test
+    fun `an extent change keeps its rule while a node has accessibility focus`() {
+        assertEquals(
+            ChildScrollDecision.ShiftBy(200),
+            childScrollDecision(0, 1000, 1200, 1500, 0, 0, false, false, showsAccessibilityFocus = true)
+        )
+        assertEquals(
+            ChildScrollDecision.Follow(60),
+            childScrollDecision(1000, 2000, 2100, 1500, 560, 500, false, false, showsAccessibilityFocus = true)
+        )
+        assertEquals(
+            ChildScrollDecision.None,
+            childScrollDecision(1000, 2000, 2000, 1500, 500, 500, false, false, showsAccessibilityFocus = true)
+        )
+    }
+
+    @Test
+    fun `a document scroll larger than an extent change is rejected while a node has accessibility focus`() {
+        assertEquals(
+            ChildScrollDecision.Reject,
+            childScrollDecision(1000, 2000, 2100, 1500, 650, 500, false, false, showsAccessibilityFocus = true)
+        )
+    }
+
+    @Test
+    fun `a resource above the viewport moves the offset by its extent change while a node has accessibility focus`() {
+        assertEquals(
+            ChildScrollDecision.ShiftBy(200),
+            childScrollDecision(0, 1000, 1200, 1500, 50, 0, false, false, showsAccessibilityFocus = true)
+        )
+    }
+
+    @Test
+    fun `the focus window is open for the page whose node took focus`() {
+        val window = AccessibilityFocusWindow()
+        assertFalse(window.isOpenFor(2, 0))
+        window.nodeFocused(2, 1000)
+        assertTrue(window.isOpenFor(2, 1000))
+        assertFalse(window.isOpenFor(1, 1000))
+        assertFalse(window.isOpenFor(3, 1000))
+        assertFalse(window.isOpenFor(-1, 1000))
+    }
+
+    @Test
+    fun `the focus window closes after its time limit`() {
+        val window = AccessibilityFocusWindow()
+        window.nodeFocused(2, 1000)
+        assertTrue(window.isOpenFor(2, 1000 + ACCESSIBILITY_FOCUS_SCROLL_MS - 1))
+        assertFalse(window.isOpenFor(2, 1000 + ACCESSIBILITY_FOCUS_SCROLL_MS))
+    }
+
+    @Test
+    fun `a new focus moves the focus window to its page`() {
+        val window = AccessibilityFocusWindow()
+        window.nodeFocused(2, 1000)
+        window.nodeFocused(3, 1500)
+        assertFalse(window.isOpenFor(2, 1500))
+        assertTrue(window.isOpenFor(3, 1500 + ACCESSIBILITY_FOCUS_SCROLL_MS - 1))
+    }
+
+    @Test
+    fun `the focus window closes at the first scroll it follows`() {
+        val window = AccessibilityFocusWindow().apply { nodeFocused(2, 1000) }
+        window.followed()
+        assertFalse(window.isOpenFor(2, 1001))
+    }
+
+    @Test
+    fun `the focus window closes at a reader gesture`() {
+        val window = AccessibilityFocusWindow().apply { nodeFocused(2, 1000) }
+        window.readerGesture()
+        assertFalse(window.isOpenFor(2, 1001))
+    }
+
+    @Test
+    fun `the focus window closes when a navigation starts`() {
+        val window = AccessibilityFocusWindow().apply { nodeFocused(2, 1000) }
+        window.navigationStarted()
+        assertFalse(window.isOpenFor(2, 1001))
+    }
+
+    @Test
+    fun `the focus window closes when focus goes to a document's root node`() {
+        val window = AccessibilityFocusWindow().apply { nodeFocused(2, 1000) }
+        window.rootFocused()
+        assertFalse(window.isOpenFor(2, 1001))
+    }
+
+    @Test
+    fun `the focus window closes when the surface moves to show the focus`() {
+        val window = AccessibilityFocusWindow().apply { nodeFocused(2, 1000) }
+        window.shownBySurface()
+        assertFalse(window.isOpenFor(2, 1001))
+    }
+
+    @Test
+    fun `a focused node cut by the lower edge moves to the middle of the band`() {
+        // A paragraph that starts in the lower half and continues below the edge.
+        assertEquals(658, accessibilityFocusShift(nodeTop = 1858, nodeBottom = 2400, bandTop = 0, bandBottom = 2400))
+        // A strip of a paragraph at the edge.
+        assertEquals(1160, accessibilityFocusShift(nodeTop = 2360, nodeBottom = 2400, bandTop = 0, bandBottom = 2400))
+        // The band does not start at the screen's top.
+        assertEquals(200, accessibilityFocusShift(nodeTop = 1500, nodeBottom = 2500, bandTop = 100, bandBottom = 2500))
+    }
+
+    @Test
+    fun `a focused node that the reader sees or that the WebView scrolls to does not move the offset`() {
+        // Wholly in the band.
+        assertEquals(0, accessibilityFocusShift(nodeTop = 1858, nodeBottom = 2300, bandTop = 0, bandBottom = 2400))
+        // It starts in the upper half: the reader reads it from its start.
+        assertEquals(0, accessibilityFocusShift(nodeTop = 600, nodeBottom = 2400, bandTop = 0, bandBottom = 2400))
+        // Its top is below or above the band: the WebView scrolls to it.
+        assertEquals(0, accessibilityFocusShift(nodeTop = 2400, nodeBottom = 2400, bandTop = 0, bandBottom = 2400))
+        assertEquals(0, accessibilityFocusShift(nodeTop = -200, nodeBottom = 300, bandTop = 0, bandBottom = 2400))
+    }
+
+    @Test
+    fun `the hidden bottom is the part of a page's view below the viewport`() {
+        // The resource starts 600 px below the viewport top; its view starts with it.
+        assertEquals(600, hiddenBottom(start = 1600, commandedLocal = 0, scrollY = 1000, viewportHeight = 2400))
+        // The view follows the viewport inside the resource.
+        assertEquals(0, hiddenBottom(start = 0, commandedLocal = 1000, scrollY = 1000, viewportHeight = 2400))
+        // The resource ends in the viewport: the view extends above it, not below.
+        assertEquals(0, hiddenBottom(start = 0, commandedLocal = 600, scrollY = 1000, viewportHeight = 2400))
+        // Wholly below the viewport.
+        assertEquals(2400, hiddenBottom(start = 9000, commandedLocal = 0, scrollY = 1000, viewportHeight = 2400))
     }
 
     @Test

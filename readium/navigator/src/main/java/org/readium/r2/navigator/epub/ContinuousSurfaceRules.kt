@@ -148,6 +148,9 @@ internal sealed interface ChildScrollDecision {
  * @param childScrollY The document's own scroll position, [commandedLocal] the one the surface
  * last wrote.
  * @param fresh The page has not taken its first commanded position yet.
+ * @param showsAccessibilityFocus The document scroll is taken as the scroll to the node that took
+ * accessibility focus. A WebView makes that scroll itself; the surface moves by it, wherever the
+ * resource is.
  */
 internal fun childScrollDecision(
     before: Int,
@@ -158,10 +161,13 @@ internal fun childScrollDecision(
     commandedLocal: Int,
     navigationPending: Boolean,
     fresh: Boolean,
+    showsAccessibilityFocus: Boolean = false,
 ): ChildScrollDecision {
     val delta = measured - oldExtent
     val childAdjust = childScrollY - commandedLocal
     return when {
+        showsAccessibilityFocus && !navigationPending && !fresh && delta == 0 && childAdjust != 0 ->
+            ChildScrollDecision.Follow(childAdjust)
         before + oldExtent <= scrollY && delta != 0 ->
             ChildScrollDecision.ShiftBy(delta)
         childAdjust != 0 && (
@@ -258,3 +264,72 @@ internal fun parseGeometrySnapshot(json: String): GeometrySnapshot? {
         null
     }
 }
+
+/**
+ * How long after a node took accessibility focus a document scroll of its page is taken as the
+ * page's scroll to that node. The page makes that scroll in its own process, so the surface
+ * sees it only later.
+ */
+internal const val ACCESSIBILITY_FOCUS_SCROLL_MS: Long = 1000L
+
+/**
+ * The page whose next document scroll the surface follows as the scroll to its accessibility
+ * focus. A node of that page that takes focus opens it; it is open for that page only, for
+ * [ACCESSIBILITY_FOCUS_SCROLL_MS] at most.
+ */
+internal class AccessibilityFocusWindow {
+    private var index = -1
+    private var until = 0L
+
+    fun nodeFocused(index: Int, now: Long) {
+        this.index = index
+        until = now + ACCESSIBILITY_FOCUS_SCROLL_MS
+    }
+
+    /** Focus on a document's root node: the scroll that shows it is not a place the reader chose. */
+    fun rootFocused() = close()
+
+    /** The surface followed the scroll: a later document scroll is not the one to the focus. */
+    fun followed() = close()
+
+    /** The surface itself moved to show the focus: the WebView makes no scroll to follow. */
+    fun shownBySurface() = close()
+
+    fun readerGesture() = close()
+
+    fun navigationStarted() = close()
+
+    fun isOpenFor(index: Int, now: Long): Boolean =
+        index >= 0 && index == this.index && now < until
+
+    private fun close() {
+        index = -1
+        until = 0L
+    }
+}
+
+/**
+ * The offset move that shows a node which took accessibility focus, in screen pixels.
+ *
+ * A WebView scrolls to a focused node only when the node's top is outside the part of the page
+ * that the reader can see, and then puts that top at the middle of it. A node whose top is
+ * visible, in the lower half of the band, and which reaches the band's lower edge, is cut by
+ * that edge: the surface puts its top at the middle as the WebView would. Bounds that a WebView
+ * reports are clipped to the view, so a node that reaches the edge can continue below it.
+ *
+ * @param nodeTop The node's top, [nodeBottom] its bottom, and [bandTop], [bandBottom] the
+ * surface's visible extent, all on the screen.
+ */
+internal fun accessibilityFocusShift(nodeTop: Int, nodeBottom: Int, bandTop: Int, bandBottom: Int): Int {
+    val middle = (bandTop + bandBottom) / 2
+    return if (nodeTop in middle until bandBottom && nodeBottom >= bandBottom) nodeTop - middle else 0
+}
+
+/**
+ * The part of a page's WebView, of [viewportHeight], that is below the viewport's lower edge.
+ *
+ * @param start Global offset of the resource's top, [commandedLocal] the scroll position the
+ * surface last wrote to its document.
+ */
+internal fun hiddenBottom(start: Int, commandedLocal: Int, scrollY: Int, viewportHeight: Int): Int =
+    (start + commandedLocal - scrollY).coerceIn(0, viewportHeight)
