@@ -309,6 +309,26 @@ internal class AccessibilityFocusWindow {
 }
 
 /**
+ * How long after the last hover of a touch exploration arrived a focus is taken as that
+ * exploration's. The page sends its focus events after a round trip to its renderer, which can
+ * come after the exploration's exit: on a phone, up to 723 ms after its last hover.
+ */
+internal const val TOUCH_FOCUS_WINDOW_MS: Long = 1200L
+
+/**
+ * A focus at [now] comes from a touch exploration: one is in progress ([exploring]), or its last
+ * hover arrived, at [lastHover], within [TOUCH_FOCUS_WINDOW_MS] before. The node under the
+ * finger takes focus where it is. Times are the arrival uptimes, not the events' own times: a
+ * screen reader sends a tap's hovers after the tap, with the tap's earlier times.
+ *
+ * A swipe to the next or previous element sends no hover, but one that comes within the window
+ * after a touch counts as the touch's: its node, if the lower edge cuts it, is not moved into
+ * view.
+ */
+internal fun focusFromTouch(now: Long, lastHover: Long?, exploring: Boolean): Boolean =
+    exploring || (lastHover != null && now - lastHover in 0..TOUCH_FOCUS_WINDOW_MS)
+
+/**
  * The offset move that shows a node which took accessibility focus, in screen pixels.
  *
  * A WebView scrolls to a focused node only when the node's top is outside the part of the page

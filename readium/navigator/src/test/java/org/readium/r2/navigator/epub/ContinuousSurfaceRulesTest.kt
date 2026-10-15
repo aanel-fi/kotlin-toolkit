@@ -431,4 +431,29 @@ class ContinuousSurfaceRulesTest {
         assertEquals(0.0, resolvedLocalY(0.0, null, 1000))
         assertNull(resolvedLocalY(null, null, 1000))
     }
+
+    @Test
+    fun `a focus with no hover before it is not from a touch`() {
+        assertFalse(focusFromTouch(10_000, null, exploring = false))
+    }
+
+    @Test
+    fun `a focus during an exploration is from the touch`() {
+        assertTrue(focusFromTouch(10_000, 5_000, exploring = true))
+        assertTrue(focusFromTouch(10_000, null, exploring = true))
+    }
+
+    @Test
+    fun `a focus up to the touch window after the last hover is from the touch`() {
+        assertTrue(focusFromTouch(10_000, 10_000, exploring = false))
+        assertTrue(focusFromTouch(10_000, 10_000 - 723, exploring = false))
+        assertTrue(focusFromTouch(10_000, 10_000 - TOUCH_FOCUS_WINDOW_MS, exploring = false))
+        assertFalse(focusFromTouch(10_000, 10_000 - TOUCH_FOCUS_WINDOW_MS - 1, exploring = false))
+        assertEquals(1200L, TOUCH_FOCUS_WINDOW_MS)
+    }
+
+    @Test
+    fun `a hover stamped after the focus does not make it a touch`() {
+        assertFalse(focusFromTouch(10_000, 10_001, exploring = false))
+    }
 }
