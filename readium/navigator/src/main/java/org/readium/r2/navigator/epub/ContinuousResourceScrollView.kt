@@ -861,6 +861,7 @@ internal class ContinuousResourceScrollView(
         page.view?.layoutParams = FrameLayout.LayoutParams(-1, height)
         slot.commandedLocal = 0
         slot.hiddenTopCss = 0
+        slot.hiddenBottomCss = 0
         slot.fresh = true
         slot.freshLocal = -1
         slot.adjustPending = false
