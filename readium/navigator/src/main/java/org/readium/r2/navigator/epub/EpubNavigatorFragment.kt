@@ -207,6 +207,22 @@ public class EpubNavigatorFragment internal constructor(
         @DelicateReadiumApi
         var disableSelectionWhenProtected: Boolean,
 
+        /**
+         * Lays out the resources of a reflowable publication on one vertical surface when scroll
+         * is enabled, so that the user scrolls from one resource into the next.
+         *
+         * Publications with vertical text or a fixed layout, and the paginated mode, are not
+         * affected.
+         */
+        @ExperimentalReadiumApi
+        var continuousScroll: Boolean,
+
+        /**
+         * Receives the events of the continuous surface; see [continuousScroll].
+         */
+        @ExperimentalReadiumApi
+        var continuousScrollListener: ContinuousScrollListener?,
+
         internal var fontFamilyDeclarations: List<FontFamilyDeclaration>,
         internal var javascriptInterfaces: Map<String, JavascriptInterfaceFactory>,
     ) {
@@ -225,6 +241,8 @@ public class EpubNavigatorFragment internal constructor(
             selectionActionModeCallback = selectionActionModeCallback,
             shouldApplyInsetsPadding = shouldApplyInsetsPadding,
             disableSelectionWhenProtected = true,
+            continuousScroll = false,
+            continuousScrollListener = null,
             fontFamilyDeclarations = emptyList(),
             javascriptInterfaces = emptyMap()
         )
@@ -303,6 +321,52 @@ public class EpubNavigatorFragment internal constructor(
         return page.runJavaScriptSuspend(script)
     }
 
+    /**
+     * Stops a fling of the continuous surface where it is. Does nothing in the other modes.
+     */
+    @ExperimentalReadiumApi
+    public fun stopContinuousScroll() {
+        continuousSurface?.stopScroll()
+    }
+
+    /**
+     * The HTML resource under the point [viewportY] pixels below the top of the navigator's view.
+     *
+     * With [Configuration.continuousScroll], several resources can be on the screen, and
+     * [evaluateJavascript] runs in the one at the top of the viewport. Use this function to reach
+     * the resource at another position, for example under a touch or at the middle of the screen.
+     *
+     * Returns null when the continuous surface is not in use, or when the resource at that
+     * position is not loaded yet.
+     */
+    @ExperimentalReadiumApi
+    public fun resourceAt(viewportY: Int): ResourceAtPoint? {
+        val point = continuousSurface?.pageAt(viewportY) ?: return null
+        val link = point.page.link ?: return null
+        return ResourceAtPoint(link, point.clientY, point.page)
+    }
+
+    /**
+     * A loaded HTML resource of the continuous surface, and a point in it.
+     *
+     * @param link The resource in the reading order.
+     * @param clientY The requested point's y coordinate in the CSS pixels of the resource's own
+     * viewport, as `document.elementFromPoint` and `document.caretRangeFromPoint` take it. It can
+     * be negative or larger than the viewport's height at the edge of a resource.
+     */
+    @ExperimentalReadiumApi
+    public class ResourceAtPoint internal constructor(
+        public val link: Link,
+        public val clientY: Double,
+        private val page: R2EpubPageFragment,
+    ) {
+        /** Evaluates the given JavaScript in this resource. */
+        public suspend fun evaluateJavascript(script: String): String? {
+            page.awaitLoaded()
+            return page.runJavaScriptSuspend(script)
+        }
+    }
+
     private val viewModel: EpubNavigatorViewModel by viewModels {
         EpubNavigatorViewModel.createFactory(
             requireActivity().application,
@@ -327,6 +391,7 @@ public class EpubNavigatorFragment internal constructor(
     internal lateinit var positions: List<Locator>
 
     internal lateinit var resourcePager: R2ViewPager
+    private var continuousSurface: ContinuousResourceScrollView? = null
 
     private lateinit var resourcesSingle: List<PageResource>
     private lateinit var resourcesDouble: List<PageResource>
@@ -409,7 +474,14 @@ public class EpubNavigatorFragment internal constructor(
         }
 
         resourcePager = binding.resourcePager
-        resetResourcePager()
+        if (usesContinuousSurface(config.continuousScroll, viewModel.isScrollEnabled.value, viewModel.verticalText, publication.metadata.layout)) {
+            val restored = savedInstanceState?.let {
+                BundleCompat.getParcelable(it, "locator", Locator::class.java)
+            }
+            showContinuousSurface(expectsNavigation = (restored ?: initialLocator) != null)
+        } else {
+            resetResourcePager()
+        }
 
         // Fixed layout publications cannot intercept JS events yet.
         if (publication.metadata.layout == Layout.FIXED) {
@@ -441,6 +513,26 @@ public class EpubNavigatorFragment internal constructor(
         parent.addView(resourcePager)
 
         resetResourcePagerAdapter()
+    }
+
+    private fun showContinuousSurface(expectsNavigation: Boolean) {
+        val parent = resourcePager.parent as ConstraintLayout
+        val params = resourcePager.layoutParams
+        resourcePager.adapter = null
+        parent.removeView(resourcePager)
+        val resources = resourcesSingle.map { it as PageResource.EpubReflowable }
+        continuousSurface = ContinuousResourceScrollView(
+            context = requireContext(),
+            fragments = childFragmentManager,
+            resources = resources,
+            expectsNavigation = expectsNavigation,
+            onPositionChanged = ::notifyCurrentLocation,
+            onFirstPositionShown = { config.continuousScrollListener?.onFirstPositionShown() },
+            onNavigationEnded = { locator, landed ->
+                config.continuousScrollListener?.onNavigationEnded(locator, landed)
+            },
+            onScrolled = { offset -> config.continuousScrollListener?.onScrolled(offset) }
+        ).also { parent.addView(it, params) }
     }
 
     private inner class PageChangeListener : ViewPager.SimpleOnPageChangeListener() {
@@ -550,13 +642,30 @@ public class EpubNavigatorFragment internal constructor(
 
     private fun invalidateResourcePager() {
         val locator = currentLocator.value
-        resetResourcePager()
+        if (continuousSurface != null) {
+            continuousSurface?.dispose()
+            val parent = continuousSurface?.parent as? ConstraintLayout
+            parent?.removeView(continuousSurface)
+            continuousSurface = null
+            parent?.addView(resourcePager)
+        }
+        if (usesContinuousSurface(config.continuousScroll, viewModel.isScrollEnabled.value, viewModel.verticalText, publication.metadata.layout)) {
+            showContinuousSurface(expectsNavigation = true)
+        } else {
+            resetResourcePager()
+        }
         go(locator)
+    }
+
+    override fun onDestroyView() {
+        continuousSurface?.dispose()
+        continuousSurface = null
+        super.onDestroyView()
     }
 
     private fun onSettingsChange(previous: EpubSettings, new: EpubSettings) {
         if (previous.effectiveBackgroundColor != new.effectiveBackgroundColor) {
-            resourcePager.setBackgroundColor(new.effectiveBackgroundColor)
+            (continuousSurface ?: resourcePager).setBackgroundColor(new.effectiveBackgroundColor)
         }
 
         if (viewModel.layout == Layout.REFLOWABLE) {
@@ -612,6 +721,13 @@ public class EpubNavigatorFragment internal constructor(
 
         val href = locator.href.removeFragment()
 
+        continuousSurface?.let { surface ->
+            val index = readingOrder.indexOfFirst { it.url().isEquivalent(href) }
+            if (index < 0) return false
+            surface.goToLocator(index, locator)
+            return true
+        }
+
         fun setCurrent(resources: List<PageResource>) {
             val page = resources.withIndex().firstOrNull { (_, res) ->
                 when (res) {
@@ -665,7 +781,13 @@ public class EpubNavigatorFragment internal constructor(
                     ?.runJavaScript(command.script)
             }
             RunScriptCommand.Scope.LoadedResources -> {
-                r2PagerAdapter?.mFragments?.forEach { _, fragment ->
+                if (command.kind == RunScriptCommand.Kind.READIUM_CSS && continuousSurface != null) {
+                    continuousSurface?.applyReadiumCss(command.script)
+                    return
+                }
+                continuousSurface?.pages()?.forEach { page ->
+                    page.takeIf { it.isLoaded.value }?.runJavaScript(command.script)
+                } ?: r2PagerAdapter?.mFragments?.forEach { _, fragment ->
                     (fragment as? R2EpubPageFragment)
                         ?.takeIf { it.isLoaded.value }
                         ?.runJavaScript(command.script)
@@ -946,10 +1068,10 @@ public class EpubNavigatorFragment internal constructor(
     }
 
     private fun locatorToPreviousResource(): Locator? =
-        locatorToResourceAtIndex(resourcePager.currentItem - 1)
+        locatorToResourceAtIndex((continuousSurface?.activeResourceIndex ?: resourcePager.currentItem) - 1)
 
     private fun locatorToNextResource(): Locator? =
-        locatorToResourceAtIndex(resourcePager.currentItem + 1)
+        locatorToResourceAtIndex((continuousSurface?.activeResourceIndex ?: resourcePager.currentItem) + 1)
 
     private fun locatorToResourceAtIndex(index: Int): Locator? =
         readingOrder.getOrNull(index)
@@ -966,7 +1088,7 @@ public class EpubNavigatorFragment internal constructor(
         currentFragment as? R2EpubPageFragment
 
     private val currentFragment: Fragment? get() =
-        fragmentAt(resourcePager.currentItem)
+        if (continuousSurface != null) continuousSurface?.currentPage else fragmentAt(resourcePager.currentItem)
 
     private fun fragmentAt(index: Int): Fragment? =
         r2PagerAdapter?.mFragments?.get(adapter.getItemId(index))
@@ -976,6 +1098,7 @@ public class EpubNavigatorFragment internal constructor(
      * view pager.
      */
     private fun loadedFragmentForHref(href: Url): R2EpubPageFragment? {
+        continuousSurface?.pages()?.firstOrNull { it.link?.url() == href }?.let { return it }
         val adapter = r2PagerAdapter ?: return null
         adapter.mFragments.forEach { _, fragment ->
             val pageFragment = fragment as? R2EpubPageFragment ?: return@forEach
@@ -1006,7 +1129,7 @@ public class EpubNavigatorFragment internal constructor(
                 currentLocator.value
 
             Layout.REFLOWABLE, Layout.SCROLLED -> {
-                val resource = readingOrder[resourcePager.currentItem]
+                val resource = readingOrder[continuousSurface?.activeResourceIndex ?: resourcePager.currentItem]
                 currentReflowablePageFragment?.webView?.findFirstVisibleLocator()
                     ?.copy(
                         href = resource.url(),
@@ -1062,14 +1185,21 @@ public class EpubNavigatorFragment internal constructor(
             }
 
             val reflowableWebView = currentReflowablePageFragment?.webView
-            val progression = reflowableWebView?.run {
+            val progression = continuousSurface?.let { surface ->
+                surface.resourceProgression(surface.activeResourceIndex, surface.scrollY)
+            } ?: reflowableWebView?.run {
                 // The transition has stabilized, so we can ask the web view to refresh its current
                 // item to reflect the current scroll position.
                 updateCurrentItem()
                 progression.coerceIn(0.0, 1.0)
             } ?: 0.0
 
-            val link = when (val pageResource = adapter.getResource(resourcePager.currentItem)) {
+            val pageResource = if (continuousSurface != null) {
+                resourcesSingle[continuousSurface!!.activeResourceIndex]
+            } else {
+                adapter.getResource(resourcePager.currentItem)
+            }
+            val link = when (pageResource) {
                 is PageResource.EpubFxl -> checkNotNull(
                     pageResource.leftLink ?: pageResource.rightLink
                 )
@@ -1141,3 +1271,45 @@ public class EpubNavigatorFragment internal constructor(
 @ExperimentalReadiumApi
 private val EpubSettings.effectiveBackgroundColor: Int get() =
     backgroundColor?.int ?: theme.backgroundColor
+
+/**
+ * Events of the continuous surface that [EpubNavigatorFragment.Configuration.continuousScroll]
+ * enables. Every function is called on the main thread.
+ */
+@ExperimentalReadiumApi
+public interface ContinuousScrollListener {
+
+    /**
+     * The surface shows its content for the first time: the initial position, or the start of
+     * its resource when that position could not be resolved or did not load in time. Until this
+     * call the surface draws its background only and takes no touch.
+     */
+    public fun onFirstPositionShown() {}
+
+    /**
+     * A request made with [EpubNavigatorFragment.go] ended.
+     *
+     * @param landed The viewport is at [locator]. When false, the request was replaced by a newer
+     * one, cancelled by a scroll of the user, or could not be honored, and the position did not
+     * change because of it.
+     */
+    public fun onNavigationEnded(locator: Locator, landed: Boolean) {}
+
+    /**
+     * The surface moved to [offset], in pixels from the top of the first resource. Called for
+     * every change, whatever moved the surface: the user, a fling, [EpubNavigatorFragment.go] or
+     * a layout change. Called during the surface's own scroll pass: do not navigate from it.
+     */
+    public fun onScrolled(offset: Int) {}
+}
+
+/**
+ * Whether the resources are laid out on one continuous surface instead of the pager.
+ */
+internal fun usesContinuousSurface(
+    continuousScroll: Boolean,
+    scroll: Boolean,
+    verticalText: Boolean,
+    layout: Layout?,
+): Boolean =
+    continuousScroll && scroll && !verticalText && layout != Layout.FIXED

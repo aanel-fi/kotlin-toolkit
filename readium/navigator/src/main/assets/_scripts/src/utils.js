@@ -150,6 +150,22 @@ export function scrollToLocator(locator) {
   return scrollToRange(range);
 }
 
+export function resolveLocatorY(locator) {
+  const range = rangeFromLocator(locator);
+  if (!range) {
+    return null;
+  }
+
+  // A target that fits in the viewport is addressed by its middle, so that it can be shown at the
+  // middle of the screen. A taller one is addressed by its top.
+  const rect = range.getBoundingClientRect();
+  const centred = rect.height <= window.innerHeight;
+  return {
+    y: rect.top + window.scrollY + (centred ? rect.height / 2 : 0),
+    centred: centred,
+  };
+}
+
 function scrollToRange(range) {
   return scrollToRect(range.getBoundingClientRect());
 }
